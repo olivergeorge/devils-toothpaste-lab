@@ -996,8 +996,10 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
           ? -4.5
           : -6.2;
 
-      arRulerGroup.visible = showArRef.current;
-      arPeakMarkerGroup.visible = showArRef.current;
+      const isEruptionPhase = rState.isRunning || Boolean(currentResult);
+
+      arRulerGroup.visible = showArRef.current && isEruptionPhase;
+      arPeakMarkerGroup.visible = showArRef.current && isEruptionPhase;
       arRulerGroup.position.x = THREE.MathUtils.damp(arRulerGroup.position.x, poleX, 6, dt);
 
       // Map real-world meters to 3D visual Y coordinate above the nozzle
@@ -1018,30 +1020,56 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
         dt
       );
 
-      // Update 2D AR Projected DOM Callout Positions
+      // Update 2D AR Projected DOM Callout Positions (Staged by Task Phase!)
       const vw = container?.clientWidth || window.innerWidth;
       const vh = container?.clientHeight || window.innerHeight;
 
-      // 1. AR Plume Apex Callout
-      positionArElement(arApexBadgeRef.current, 0, arPeakMarkerGroup.position.y, 0, vw, vh);
-      if (arApexTitleRef.current && arApexSubRef.current) {
-        const prefix = rState.isRunning ? 'LIVE FOAM HEIGHT' : 'TARGET HEIGHT';
-        const feet = Math.round(rState.currentLiveHeightMeters * 3.28084);
-        arApexTitleRef.current.textContent = `${prefix}: ${rState.currentLiveHeightMeters} m (${feet} ft)`;
-        arApexSubRef.current.textContent = getShortComparison(rState.currentLiveHeightMeters);
+      // 1. AR Plume Apex Callout — ONLY shown during/after eruption (Staged Revelation)
+      if (!isEruptionPhase) {
+        if (arApexBadgeRef.current) arApexBadgeRef.current.style.opacity = '0';
+      } else {
+        positionArElement(arApexBadgeRef.current, 0, arPeakMarkerGroup.position.y, 0, vw, vh);
+        if (arApexTitleRef.current && arApexSubRef.current) {
+          const prefix = rState.isRunning ? 'LIVE FOAM HEIGHT' : 'FINAL HEIGHT';
+          const feet = Math.round(rState.currentLiveHeightMeters * 3.28084);
+          arApexTitleRef.current.textContent = `${prefix}: ${rState.currentLiveHeightMeters} m (${feet} ft)`;
+          arApexSubRef.current.textContent = getShortComparison(rState.currentLiveHeightMeters);
+        }
       }
 
-      // 2. AR Vessel Core Thermal & Volume Sensor
+      // 2. AR Vessel Sensor — Shows Live Measured Contents during Mixing, Core Temp & Speed during Eruption
       const vesselY = activeRig.metrics.nozzleY * 0.55;
-      const vesselOffsetX = Math.abs(poleX) * 0.72;
+      const vesselOffsetX = Math.abs(poleX) * 0.68;
       positionArElement(arVesselBadgeRef.current, vesselOffsetX, vesselY, 0, vw, vh);
       if (arVesselTempRef.current && arVesselStatsRef.current) {
-        const activeSim = currentResult || predResult;
-        arVesselTempRef.current.textContent = `CORE TEMP: ${rState.currentLiveTempCelsius} °C`;
-        arVesselStatsRef.current.textContent = `FOAM VOL: ${activeSim.foamVolumeCubicMeters} m³ · SPEED: ${activeSim.eruptionVelocityMps} m/s`;
+        if (!isEruptionPhase) {
+          const cap = SCALE_ENVIRONMENTS[currentConfig.scaleId].vesselCapacityLiters;
+          const hasP =
+            currentConfig.additionOrder.includes('peroxide') &&
+            currentConfig.peroxideVolumePercent > 0;
+          const liters = hasP
+            ? ((cap * currentConfig.peroxideVolumePercent) / 100).toFixed(1)
+            : '0';
+          const soapVal = currentConfig.additionOrder.includes('soap')
+            ? currentConfig.soapVolumeMlPerLiter
+            : 0;
+          const catVal = currentConfig.additionOrder.includes('catalyst')
+            ? currentConfig.catalystRatio
+            : 0;
+          arVesselTempRef.current.textContent = `MEASURED IN VESSEL: ${liters} L (${currentConfig.peroxideConcentration}% H₂O₂)`;
+          arVesselStatsRef.current.textContent = `SOAP: ${soapVal} mL/L · CATALYST: ${catVal}%${
+            currentConfig.includeOrbeez && currentConfig.orbeezCount
+              ? ` · ORBEEZ: ${currentConfig.orbeezCount}`
+              : ''
+          }`;
+        } else {
+          const activeSim = currentResult || predResult;
+          arVesselTempRef.current.textContent = `CORE TEMP: ${rState.currentLiveTempCelsius} °C`;
+          arVesselStatsRef.current.textContent = `FOAM VOL: ${activeSim.foamVolumeCubicMeters} m³ · SPEED: ${activeSim.eruptionVelocityMps} m/s`;
+        }
       }
 
-      // 3. AR Scientist Standoff Distance Callout
+      // 3. AR Scientist Safety & Standoff Callout
       positionArElement(
         arAvatarBadgeRef.current,
         0,
@@ -1051,17 +1079,24 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
         vh
       );
       if (arAvatarTextRef.current) {
-        const isSafeDist = currentGear.standBackMeters >= safetyEval.minSafeDistanceMeters;
-        arAvatarTextRef.current.textContent = `STANDOFF: ${currentGear.standBackMeters}m ${
-          isSafeDist ? '(SAFE ZONE ✓)' : `(NEED ${safetyEval.minSafeDistanceMeters}m ⚠️)`
-        }`;
+        if (!currentGear.goggles) {
+          arAvatarTextRef.current.textContent = `NO GOGGLES ON! ⚠️ (Soap-in-Eye Risk!)`;
+        } else {
+          const isSafeDist = currentGear.standBackMeters >= safetyEval.minSafeDistanceMeters;
+          arAvatarTextRef.current.textContent = `GOGGLES ON ✓ · ${currentGear.standBackMeters}m ${
+            isSafeDist ? '(SAFE ✓)' : `(NEED ${safetyEval.minSafeDistanceMeters}m ⚠️)`
+          }`;
+        }
       }
 
-      // 4. AR Vertical Scale Ruler Benchmarks
+      // 4. AR Vertical Scale Ruler Benchmarks — Staged in ONLY during/after Eruption!
       AR_BENCHMARKS.forEach((bm, idx) => {
         const el = arBenchmarkRefs.current[idx];
+        if (!isEruptionPhase) {
+          if (el) el.style.opacity = '0';
+          return;
+        }
         const bmVisualY = activeRig.metrics.nozzleY + bm.meters * visualScaleY;
-        // Only show benchmarks that make sense for the current camera distance/scale
         const maxVisibleMeters =
           currentConfig.scaleId === 'lab_beaker'
             ? 7

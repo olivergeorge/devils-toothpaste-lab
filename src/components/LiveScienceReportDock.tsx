@@ -55,8 +55,8 @@ interface LiveScienceReportDockProps {
   onUpdateConfig: (partial: Partial<ExperimentConfig>) => void;
   onToggleSafetyGear: (key: keyof SafetyGearState) => void;
   onEquipAllSafety: () => void;
-  onMeasureInIngredient: (step: IngredientStep) => void;
-  onStartDragIngredient: (step: IngredientStep | null) => void;
+  activePhraseStep: IngredientStep | null;
+  onBeginPourPhrase: (step: IngredientStep, e: React.PointerEvent) => void;
   onEmptyContainer: () => void;
   onApplyPreset: (presetId: string) => void;
   onTriggerEruption: () => void;
@@ -100,8 +100,8 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
   onUpdateConfig,
   onToggleSafetyGear,
   onEquipAllSafety,
-  onMeasureInIngredient,
-  onStartDragIngredient,
+  activePhraseStep,
+  onBeginPourPhrase,
   onEmptyContainer,
   onApplyPreset,
   onTriggerEruption,
@@ -111,9 +111,7 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
   onQuickDownloadPoster,
   isDownloadingPoster,
 }) => {
-  // Side Report Clipboard can be tucked away so the center 3D view is 100% open
   const [isSideReportOpen, setIsSideReportOpen] = useState(true);
-  const [isBowlDragOver, setIsBowlDragOver] = useState(false);
 
   const displayedTelemetry = activeResult || predictedResult;
   const scaleSpec = SCALE_ENVIRONMENTS[config.scaleId];
@@ -135,54 +133,69 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
   const ingredientCards: {
     step: IngredientStep;
     title: string;
-    doseHint: string;
+    actionHint: string;
     measuredBadge: string;
+    fillPct: number;
+    barColor: string;
     colorClass: string;
   }[] = [
     {
       step: 'peroxide',
       title: 'H₂O₂ Peroxide',
-      doseHint: '+25%',
-      measuredBadge: hasPeroxide ? `${measuredPeroxideLiters}L` : '0L',
+      actionHint: 'Hold/Drag',
+      measuredBadge: hasPeroxide ? `${measuredPeroxideLiters}L (${config.peroxideVolumePercent}%)` : '0L',
+      fillPct: Math.min(100, (config.peroxideVolumePercent / 100) * 100),
+      barColor: config.peroxideVolumePercent > 100 ? '#f43f5e' : '#38bdf8',
       colorClass: hasPeroxide
-        ? 'border-sky-400 bg-sky-500/20 text-sky-200'
+        ? 'border-sky-400 bg-sky-500/20 text-sky-100'
         : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-sky-500/60',
     },
     {
       step: 'soap',
       title: 'Dish Soap',
-      doseHint: '+22mL',
+      actionHint: 'Hold/Drag',
       measuredBadge: hasSoap
         ? `${config.soapVolumeMlPerLiter}mL${
             config.soapVolumeMlPerLiter >= 75
               ? ' OVER!'
               : config.soapVolumeMlPerLiter < 28
               ? ' LOW'
-              : ' OK'
+              : ' SWEET!'
           }`
         : '0mL',
+      fillPct: Math.min(100, (config.soapVolumeMlPerLiter / 110) * 100),
+      barColor:
+        config.soapVolumeMlPerLiter >= 75
+          ? '#f43f5e'
+          : config.soapVolumeMlPerLiter >= 32
+          ? '#34d399'
+          : '#fbbf24',
       colorClass: hasSoap
         ? config.soapVolumeMlPerLiter >= 75
-          ? 'border-rose-400 bg-rose-500/20 text-rose-200'
-          : 'border-emerald-400 bg-emerald-500/20 text-emerald-200'
+          ? 'border-rose-400 bg-rose-500/20 text-rose-100'
+          : 'border-emerald-400 bg-emerald-500/20 text-emerald-100'
         : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-emerald-500/60',
     },
     {
       step: 'orbeez',
       title: 'Orbeez',
-      doseHint: '+2.5k',
-      measuredBadge: hasOrbeez ? `${((config.orbeezCount || 2500) / 1000).toFixed(1)}k` : '0',
+      actionHint: 'Hold/Drag',
+      measuredBadge: hasOrbeez ? `${((config.orbeezCount || 0) / 1000).toFixed(1)}k` : '0',
+      fillPct: Math.min(100, ((config.orbeezCount || 0) / 10000) * 100),
+      barColor: '#c084fc',
       colorClass: hasOrbeez
-        ? 'border-purple-400 bg-purple-500/20 text-purple-200'
+        ? 'border-purple-400 bg-purple-500/20 text-purple-100'
         : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-purple-500/60',
     },
     {
       step: 'catalyst',
       title: 'Catalyst',
-      doseHint: '+35%',
+      actionHint: 'Hold/Drag',
       measuredBadge: hasCatalyst ? `${config.catalystRatio}%` : '0%',
+      fillPct: Math.min(100, config.catalystRatio),
+      barColor: '#f59e0b',
       colorClass: hasCatalyst
-        ? 'border-amber-400 bg-amber-500/20 text-amber-200'
+        ? 'border-amber-400 bg-amber-500/20 text-amber-100'
         : 'border-slate-700 bg-slate-900 text-slate-300 hover:border-amber-500/60',
     },
   ];
@@ -196,7 +209,6 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
           transform: isSideReportOpen ? 'translateX(0)' : 'translateX(calc(100% + 16px))',
         }}
       >
-        {/* Toggle Tab sticking out on the left edge when closed */}
         {!isSideReportOpen && (
           <button
             type="button"
@@ -323,34 +335,8 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
               </div>
             </div>
 
-            {/* 3. METHOD LOG (Drop Target + Steps) */}
-            <div
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'copy';
-                if (!isBowlDragOver) setIsBowlDragOver(true);
-              }}
-              onDragLeave={() => setIsBowlDragOver(false)}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsBowlDragOver(false);
-                const step = e.dataTransfer.getData('text/plain') as IngredientStep;
-                if (
-                  step === 'peroxide' ||
-                  step === 'soap' ||
-                  step === 'orbeez' ||
-                  step === 'catalyst'
-                ) {
-                  onMeasureInIngredient(step);
-                }
-                onStartDragIngredient(null);
-              }}
-              className={`p-2 rounded-lg border space-y-1 transition-colors ${
-                isBowlDragOver
-                  ? 'border-amber-400 bg-amber-500/20'
-                  : 'bg-slate-950/90 border-slate-800/90'
-              }`}
-            >
+            {/* 3. METHOD LOG (Chronological Phrase Log) */}
+            <div className="p-2 rounded-lg bg-slate-950/90 border border-slate-800/90 space-y-1">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-bold font-mono-tabular text-emerald-400">
                   3. METHOD LOG (POUR ORDER)
@@ -363,7 +349,7 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
                 {(!config.pouredLog || config.pouredLog.length === 0) &&
                 config.additionOrder.length === 0 ? (
                   <p className="text-[10px] text-amber-300 italic py-1">
-                    Empty! Drag bottles from the bottom bar onto the 3D container!
+                    Empty! Hold or drag any bottle on the bottom bench to measure it in!
                   </p>
                 ) : (
                   (config.pouredLog && config.pouredLog.length > 0
@@ -486,7 +472,7 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
             <span>
               {isCollapsed
                 ? 'Show Lab Bench Controls (H)'
-                : 'DRAG & DROP BOTTLES ONTO THE 3D CONTAINER ABOVE!'}
+                : 'HOLD OR DRAG BOTTLES UP TO THE 3D CONTAINER TO MEASURE IN!'}
             </span>
             {isCollapsed ? (
               <ChevronUp className="w-3 h-3" />
@@ -510,7 +496,7 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
                 }`}
               >
                 <Ruler className="w-3 h-3" />
-                <span>AR Ruler: {showArMeasures ? 'ON' : 'OFF'}</span>
+                <span>AR Sensors: {showArMeasures ? 'ON' : 'OFF'}</span>
               </button>
 
               <span className="text-slate-700">|</span>
@@ -670,44 +656,55 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
             </div>
           </div>
 
-          {/* CENTER GROUP: 4 Draggable Ingredient Bottles (Drag up onto the 3D container or click!) */}
+          {/* CENTER GROUP: 4 Pointer-Phrased Ingredient Bottles (Press & Hold OR Drag to Vessel!) */}
           <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
-            {ingredientCards.map((card) => (
-              <div
-                key={card.step}
-                draggable
-                onDragStart={(e) => {
-                  e.dataTransfer.setData('text/plain', card.step);
-                  e.dataTransfer.effectAllowed = 'copy';
-                  onStartDragIngredient(card.step);
-                }}
-                onDragEnd={() => onStartDragIngredient(null)}
-                onClick={() => onMeasureInIngredient(card.step)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
+            {ingredientCards.map((card) => {
+              const isEngaged = activePhraseStep === card.step;
+              return (
+                <div
+                  key={card.step}
+                  onPointerDown={(e) => {
                     e.preventDefault();
-                    onMeasureInIngredient(card.step);
-                  }
-                }}
-                title="Drag & drop onto the 3D container above (or click) to measure in!"
-                className={`cursor-grab active:cursor-grabbing select-none px-2.5 py-1 rounded-lg border transition-all flex items-center gap-1.5 whitespace-nowrap shrink-0 ${card.colorClass}`}
-              >
-                <GripVertical className="w-3 h-3 opacity-60 shrink-0" />
-                <div>
-                  <div className="text-[11px] font-bold leading-none flex items-center gap-1">
-                    <span>{card.title}</span>
-                    <span className="text-[9px] font-mono-tabular px-1 py-0.5 rounded bg-slate-950/80">
-                      {card.doseHint}
+                    onBeginPourPhrase(card.step, e);
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onBeginPourPhrase(card.step, e as unknown as React.PointerEvent);
+                    }
+                  }}
+                  style={{ touchAction: 'none' }}
+                  className={`cursor-grab active:cursor-grabbing select-none px-2.5 py-1 rounded-lg border transition-transform flex flex-col justify-between min-w-[112px] whitespace-nowrap shrink-0 ${
+                    isEngaged ? 'scale-105 ring-2 ring-amber-400' : ''
+                  } ${card.colorClass}`}
+                >
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-[11px] font-bold leading-none flex items-center gap-0.5">
+                      <GripVertical className="w-3 h-3 opacity-60 shrink-0" />
+                      <span>{card.title}</span>
+                    </span>
+                    <span className="text-[9px] font-mono-tabular px-1 py-0.5 rounded bg-slate-950/80 text-amber-300">
+                      {isEngaged ? 'POURING...' : card.actionHint}
                     </span>
                   </div>
-                  <div className="text-[10px] font-mono-tabular opacity-90 mt-0.5">
-                    In: {card.measuredBadge}
+                  <div className="flex items-center justify-between text-[10px] font-mono-tabular opacity-95 mt-0.5">
+                    <span>{card.measuredBadge}</span>
+                  </div>
+                  {/* Mini Graduated Fill Bar inside the bottle card */}
+                  <div className="w-full h-1 bg-slate-950 rounded-full overflow-hidden mt-1">
+                    <div
+                      className="h-full transition-all duration-75"
+                      style={{
+                        width: `${card.fillPct}%`,
+                        backgroundColor: card.barColor,
+                      }}
+                    />
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             <button
               type="button"
@@ -761,9 +758,9 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
             >
               <FileText className="w-3.5 h-3.5" />
               <span className="hidden xl:inline">Report</span>
-              { safetyAssessment.isCompliant ? (
+              {safetyAssessment.isCompliant ? (
                 <ShieldCheck className="w-3 h-3 text-emerald-400" />
-              ) : null }
+              ) : null}
             </button>
           </div>
         </div>

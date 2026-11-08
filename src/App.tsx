@@ -14,6 +14,7 @@ import {
 } from './types/chemistry';
 import {
   DYE_COLORS,
+  INGREDIENT_META,
   PRESET_EXPERIMENTS,
   SCALE_ENVIRONMENTS,
   evaluateExperimentMishaps,
@@ -31,6 +32,12 @@ import { LiveScienceReportDock } from './components/LiveScienceReportDock';
 
 const STORAGE_KEY_REPORTS = 'elephants_toothpaste_saved_reports_v1';
 
+function isPointInsideVesselZone(x: number, y: number): boolean {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  return x >= vw * 0.18 && x <= vw * 0.76 && y >= 56 && y <= vh - 92;
+}
+
 export default function App() {
   const [scientistName, setScientistName] = useState<string>('CrunchLabs Explorer');
   const [config, setConfig] = useState<ExperimentConfig>(PRESET_EXPERIMENTS[0].config);
@@ -44,9 +51,35 @@ export default function App() {
     count: 0,
   });
 
-  // Drag & Drop State for Measuring Into the 3D Container
-  const [draggingStep, setDraggingStep] = useState<IngredientStep | null>(null);
-  const [is3dDropHover, setIs3dDropHover] = useState(false);
+  // Unified Pointer-Phrased State 2 Pouring & Spatial Drag State (Mouse, Touch & Pen)
+  const [activePhraseStep, setActivePhraseStep] = useState<IngredientStep | null>(null);
+  const [pointerPos, setPointerPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [hasDraggedFromBench, setHasDraggedFromBench] = useState(false);
+  const [isInsideVesselTarget, setIsInsideVesselTarget] = useState(true);
+
+  const phraseRef = useRef<{
+    step: IngredientStep | null;
+    startX: number;
+    startY: number;
+    startTime: number;
+    hasDragged: boolean;
+    insideTarget: boolean;
+    ticksPoured: number;
+  }>({
+    step: null,
+    startX: 0,
+    startY: 0,
+    startTime: 0,
+    hasDragged: false,
+    insideTarget: true,
+    ticksPoured: 0,
+  });
+
+  const configRef = useRef(config);
+  configRef.current = config;
+
+  const safetyGearRef = useRef(safetyGear);
+  safetyGearRef.current = safetyGear;
 
   // Hilarious "Soap & Foam in Your Eyes!" Screen Splat State (when Goggles are off!)
   const [soapInEyeActive, setSoapInEyeActive] = useState(false);
@@ -56,7 +89,7 @@ export default function App() {
 
   // Mark Rober Live Commentary & 3-2-1 Countdown State
   const [roberQuote, setRoberQuote] = useState<string>(
-    'Drag & drop bottles from Section 3 onto the 3D container to measure them in! Watch out: your Splash Goggles are UNCHECKED—if you squirt too much soap or launch without goggles, you’ll get soap in your eyes!'
+    'Press & hold any bottle on the bench (or drag it over the 3D container) to pour! Watch out: your Splash Goggles are UNCHECKED—squirting too much soap without goggles will splat soap in your eyes!'
   );
   const [countdownNumber, setCountdownNumber] = useState<number | null>(null);
   const [showArMeasures, setShowArMeasures] = useState<boolean>(true);
@@ -112,7 +145,7 @@ export default function App() {
     [config, safetyGear, activeResult, predictedResult]
   );
 
-  // Switch Scale Environment from Top Bar or Section 1 (Aim) of the Live Report
+  // Switch Scale Environment from Top Bar
   const handleSelectScale = (scaleId: ScaleEnvironmentId) => {
     soundEngine.playUiClick(580);
     const recommendedDist = SCALE_ENVIRONMENTS[scaleId].recommendedDistanceMeters;
@@ -130,7 +163,7 @@ export default function App() {
 
     if (scaleId === 'lab_beaker') {
       setRoberQuote(
-        'Aim updated to the 2L Lab Beaker! Drag & drop Peroxide, Soap, and Catalyst onto the beaker to measure your mix!'
+        'Aim updated to the 2L Lab Beaker! Hold or drag Peroxide, Soap, and Catalyst into the beaker to measure your mix!'
       );
     } else if (scaleId === 'kiddie_pool') {
       setRoberQuote(
@@ -138,7 +171,7 @@ export default function App() {
       );
     } else if (scaleId === 'steel_flask') {
       setRoberQuote(
-        'Aim updated to the 2,200L Giant Steel Volcano! Drag & drop Orbeez beads into the cone to boost the foam jet height!'
+        'Aim updated to the 2,200L Giant Steel Volcano! Pour Orbeez beads into the cone to boost the foam jet height!'
       );
     } else {
       setRoberQuote(
@@ -147,7 +180,7 @@ export default function App() {
     }
   };
 
-  // Update chemical parameters from Section 1 & Section 2 of the Live Science Report
+  // Update chemical parameters
   const handleUpdateConfig = (partial: Partial<ExperimentConfig>) => {
     soundEngine.playUiClick(540);
     setActiveResult(null);
@@ -155,14 +188,14 @@ export default function App() {
       const next = { ...prev, ...partial };
       if (partial.peroxideConcentration === 50) {
         setRoberQuote(
-          '50% DEVIL’S TOOTHPASTE GRADE! That is 16× stronger than store peroxide—if you only put 1 squirt of soap, it’ll flash straight to >100°C STEAM!'
+          '50% DEVIL’S TOOTHPASTE GRADE! That is 16× stronger than store peroxide—if you only pour a tiny bit of soap (<28 mL/L), it’ll flash straight to >100°C STEAM!'
         );
       }
       return next;
     });
   };
 
-  // Toggle individual Safety Checkboxes in Section 2 of the Live Science Report
+  // Toggle individual Safety Checkboxes
   const handleToggleSafetyGear = (key: keyof SafetyGearState) => {
     soundEngine.playUiClick(560);
     setSafetyGear((prev) => {
@@ -170,9 +203,13 @@ export default function App() {
       const nextVal = !prev[key];
       if (key === 'goggles' && nextVal) {
         setSoapInEyeActive(false);
-        setRoberQuote('Splash Goggles ON! Your eyes are now protected from flying dish soap and foam!');
+        setRoberQuote(
+          'Splash Goggles ON! Your eyes are now protected from flying dish soap and foam!'
+        );
       } else if (key === 'goggles' && !nextVal) {
-        setRoberQuote('Uh oh! You took off your Splash Goggles! Watch out for flying soap bubbles!');
+        setRoberQuote(
+          'Uh oh! You took off your Splash Goggles! Watch out for flying soap bubbles!'
+        );
       } else if (key === 'gloves' && nextVal) {
         setRoberQuote('Nitrile Gloves ON! No more Smurf-stained fingers!');
       }
@@ -183,123 +220,257 @@ export default function App() {
     });
   };
 
-  // Measure in an ingredient via Drag & Drop (or Click) — updates amounts & Science Report log!
-  const handleMeasureInIngredient = (step: IngredientStep) => {
-    soundEngine.playIngredientPour(step);
-    setActiveResult(null);
-    setPourStepTrigger((prev) => ({ step, count: prev.count + 1 }));
+  // Incrementally pour a step (either continuous tick during State 2 hold/drag or 1 discrete scoop on tap)
+  const applyIncrementalPour = useCallback(
+    (step: IngredientStep, isQuickTapScoop: boolean) => {
+      setActiveResult(null);
+      setPourStepTrigger((prev) => ({ step, count: prev.count + 1 }));
 
-    setConfig((prev) => {
-      const scale = SCALE_ENVIRONMENTS[prev.scaleId];
-      const alreadyAdded = prev.additionOrder.includes(step);
-      const nextOrder = alreadyAdded ? prev.additionOrder : [...prev.additionOrder, step];
+      setConfig((prev) => {
+        const alreadyAdded = prev.additionOrder.includes(step);
+        const nextOrder = alreadyAdded ? prev.additionOrder : [...prev.additionOrder, step];
 
-      let nextPeroxideVol = prev.peroxideVolumePercent;
-      let nextSoapMl = prev.soapVolumeMlPerLiter;
-      let nextOrbeezCount = prev.orbeezCount || 0;
-      let nextCatalystRatio = prev.catalystRatio;
-      let nextIncludeOrbeez = prev.includeOrbeez;
-      let logLabel = '';
+        let nextPeroxideVol = prev.peroxideVolumePercent;
+        let nextSoapMl = prev.soapVolumeMlPerLiter;
+        let nextOrbeezCount = prev.orbeezCount || 0;
+        let nextCatalystRatio = prev.catalystRatio;
+        let nextIncludeOrbeez = prev.includeOrbeez;
 
-      if (step === 'peroxide') {
-        nextPeroxideVol = alreadyAdded ? Math.min(125, prev.peroxideVolumePercent + 25) : 25;
-        const liters = ((scale.vesselCapacityLiters * nextPeroxideVol) / 100).toFixed(1);
-        logLabel = `Poured +25% Jug → Now ${liters} L (${nextPeroxideVol}% full) of ${prev.peroxideConcentration}% H₂O₂${
-          nextPeroxideVol > 100 ? ' [OVERFLOWING RIM!]' : ''
-        }`;
-
-        if (nextPeroxideVol > 100) {
-          setRoberQuote(
-            `WHOA! ${nextPeroxideVol}% FULL! You poured ${liters} L into a ${scale.vesselCapacityLiters} L container—peroxide is sloshing over the rim!`
-          );
-        } else {
-          setRoberQuote(
-            `Measured in ${liters} L (${nextPeroxideVol}% full) of ${prev.peroxideConcentration}% Hydrogen Peroxide! Drag again to add more!`
-          );
-        }
-      } else if (step === 'soap') {
-        nextSoapMl = alreadyAdded ? Math.min(110, prev.soapVolumeMlPerLiter + 22) : 22;
-        const status =
-          nextSoapMl < 28
-            ? '1 Squirt — Low Soap (Steam Flash Risk!)'
-            : nextSoapMl <= 55
-            ? 'Golden Ratio Sweet Spot!'
-            : nextSoapMl < 75
-            ? 'Extra Bubbly!'
-            : 'SOAP OVERDOSE! (Slime Slug Warning!)';
-        logLabel = `Squirted +22 mL/L Dish Soap → Total ${nextSoapMl} mL/L (${status})`;
-
-        if (nextSoapMl >= 75) {
-          soundEngine.playSlimeBurpSound();
-          setRoberQuote(
-            `BWAHAHA! ${nextSoapMl} mL/L OF DISH SOAP?! Science Bob warned us: that much soap will turn the eruption into a heavy, slow-oozing SLIME SLUG!`
-          );
-        } else if (nextSoapMl < 28) {
-          setRoberQuote(
-            `Measured ${nextSoapMl} mL/L Dish Soap (1 squirt)! Careful: if you use 50% Peroxide with only 1 squirt of soap, it flashes straight to STEAM! Drag again for the 44 mL/L sweet spot!`
-          );
-        } else {
-          setRoberQuote(
-            `NICE! ${nextSoapMl} mL/L of Dish Soap—that’s right in Science Bob’s Golden Ratio sweet spot for maximum foam height!`
-          );
+        if (step === 'peroxide') {
+          const delta = isQuickTapScoop ? 25 : 5;
+          nextPeroxideVol = alreadyAdded
+            ? Math.min(125, prev.peroxideVolumePercent + delta)
+            : isQuickTapScoop
+            ? 25
+            : 10;
+          soundEngine.playPourPulse('peroxide', nextPeroxideVol / 100);
+        } else if (step === 'soap') {
+          const delta = isQuickTapScoop ? 22 : 4;
+          nextSoapMl = alreadyAdded
+            ? Math.min(110, prev.soapVolumeMlPerLiter + delta)
+            : isQuickTapScoop
+            ? 22
+            : 8;
+          soundEngine.playPourPulse('soap', nextSoapMl / 90);
+        } else if (step === 'orbeez') {
+          nextIncludeOrbeez = true;
+          const delta = isQuickTapScoop ? 2500 : 500;
+          nextOrbeezCount = alreadyAdded
+            ? Math.min(10000, (prev.orbeezCount || 0) + delta)
+            : isQuickTapScoop
+            ? 2500
+            : 500;
+          soundEngine.playPourPulse('orbeez', nextOrbeezCount / 10000);
+        } else if (step === 'catalyst') {
+          const delta = isQuickTapScoop ? 35 : 7;
+          nextCatalystRatio = alreadyAdded
+            ? Math.min(100, prev.catalystRatio + delta)
+            : isQuickTapScoop
+            ? 35
+            : 14;
+          soundEngine.playPourPulse('catalyst', nextCatalystRatio / 100);
         }
 
-        // Funny Mistake: Squirting lots of soap without Splash Goggles -> SPLAT! Soap in Eye!
-        if (!safetyGear.goggles && nextSoapMl >= 44) {
-          soundEngine.playSoapSplatSound();
-          setSoapInEyeReason(
-            `You squirted ${nextSoapMl} mL/L of Dish Soap with NO Splash Goggles on, and the bottle burped soap bubbles right into your eyes!`
-          );
-          setSoapInEyeActive(true);
-        }
-      } else if (step === 'orbeez') {
-        nextIncludeOrbeez = true;
-        nextOrbeezCount = alreadyAdded ? Math.min(10000, (prev.orbeezCount || 0) + 2500) : 2500;
-        logLabel = `Dumped +2,500 Orbeez → Total ${nextOrbeezCount.toLocaleString()} Water Beads`;
+        return {
+          ...prev,
+          peroxideVolumePercent: nextPeroxideVol,
+          soapVolumeMlPerLiter: nextSoapMl,
+          orbeezCount: nextOrbeezCount,
+          catalystRatio: nextCatalystRatio,
+          includeOrbeez: nextIncludeOrbeez,
+          additionOrder: nextOrder,
+        };
+      });
+    },
+    []
+  );
+
+  // Commit the completed phrase to the Science Report Method Log when State 2 muscle tension releases!
+  const commitCompletedPhraseToReport = useCallback((step: IngredientStep) => {
+    const cur = configRef.current;
+    const gear = safetyGearRef.current;
+    const scale = SCALE_ENVIRONMENTS[cur.scaleId];
+    let logLabel = '';
+
+    if (step === 'peroxide') {
+      const liters = ((scale.vesselCapacityLiters * cur.peroxideVolumePercent) / 100).toFixed(1);
+      logLabel = `Measured ${liters} L (${cur.peroxideVolumePercent}% full) of ${cur.peroxideConcentration}% H₂O₂${
+        cur.peroxideVolumePercent > 100 ? ' [OVERFLOWING RIM!]' : ''
+      }`;
+      if (cur.peroxideVolumePercent > 100) {
         setRoberQuote(
-          `BOING! Measured ${nextOrbeezCount.toLocaleString()} squishy Orbeez water beads into the container! Your Science Report is updated!`
+          `WHOA! ${cur.peroxideVolumePercent}% FULL! You poured ${liters} L into a ${scale.vesselCapacityLiters} L container—peroxide is sloshing over the rim!`
         );
-      } else if (step === 'catalyst') {
-        nextCatalystRatio = alreadyAdded ? Math.min(100, prev.catalystRatio + 35) : 35;
-        const catName =
-          prev.catalystType === 'potassium_iodide' ? 'Potassium Iodide' : 'Warm Yeast';
-        const beforeSoap = !nextOrder.includes('soap');
-        logLabel = `Measured ${nextCatalystRatio}% ${catName} Catalyst${
-          beforeSoap ? ' [BEFORE SOAP — MISTAKE!]' : ''
-        }`;
+      } else {
+        setRoberQuote(
+          `Measured ${liters} L (${cur.peroxideVolumePercent}% full) of ${cur.peroxideConcentration}% Hydrogen Peroxide into the ${scale.name}!`
+        );
+      }
+    } else if (step === 'soap') {
+      const status =
+        cur.soapVolumeMlPerLiter < 28
+          ? 'Too Little — Steam Risk!'
+          : cur.soapVolumeMlPerLiter <= 58
+          ? 'Golden Ratio Sweet Spot!'
+          : cur.soapVolumeMlPerLiter < 75
+          ? 'Extra Bubbly!'
+          : 'SOAP OVERDOSE! (Slime Slug!)';
+      logLabel = `Squirted ${cur.soapVolumeMlPerLiter} mL/L Dish Soap (${status})`;
 
-        if (beforeSoap) {
-          setRoberQuote(
-            `HOLD EVERYTHING! You dragged in ${catName} BEFORE Dish Soap! Hit SEND IT to see why all the oxygen boils away without soap!`
-          );
-        } else {
-          setRoberQuote(
-            `Measured ${nextCatalystRatio}% ${catName} Catalyst into the dump trough! Hit SEND IT in Section 4 to see what really happens!`
-          );
-        }
+      if (cur.soapVolumeMlPerLiter >= 75) {
+        soundEngine.playSlimeBurpSound();
+        setRoberQuote(
+          `BWAHAHA! ${cur.soapVolumeMlPerLiter} mL/L OF DISH SOAP?! Science Bob warned us: that much soap will turn the eruption into a heavy, slow-oozing SLIME SLUG!`
+        );
+      } else if (cur.soapVolumeMlPerLiter < 28) {
+        setRoberQuote(
+          `Measured ${cur.soapVolumeMlPerLiter} mL/L Dish Soap! Careful: if you use 50% Peroxide with <28 mL/L soap, it flashes straight to >100°C STEAM!`
+        );
+      } else {
+        setRoberQuote(
+          `SWEET SPOT! ${cur.soapVolumeMlPerLiter} mL/L of Dish Soap—right in Science Bob’s Golden Ratio for maximum foam height!`
+        );
       }
 
-      const newRecord: PouredStepRecord = {
-        id: `pour_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-        step,
-        amountLabel: logLabel,
-        timestamp: new Date().toLocaleTimeString([], { minute: '2-digit', second: '2-digit' }),
-      };
+      // Funny Mistake: Squirting soap without Splash Goggles -> SPLAT! Soap in Eye!
+      if (!gear.goggles && cur.soapVolumeMlPerLiter >= 40) {
+        soundEngine.playSoapSplatSound();
+        setSoapInEyeReason(
+          `You squirted ${cur.soapVolumeMlPerLiter} mL/L of Dish Soap with NO Splash Goggles on, and soap bubbles splattered right into your eyes!`
+        );
+        setSoapInEyeActive(true);
+      }
+    } else if (step === 'orbeez') {
+      logLabel = `Measured ${(cur.orbeezCount || 2500).toLocaleString()} Orbeez Water Beads`;
+      setRoberQuote(
+        `BOING! Measured ${(cur.orbeezCount || 2500).toLocaleString()} squishy Orbeez beads into the container!`
+      );
+    } else if (step === 'catalyst') {
+      const catName =
+        cur.catalystType === 'potassium_iodide' ? 'Potassium Iodide' : 'Warm Yeast';
+      const beforeSoap = !cur.additionOrder.includes('soap');
+      logLabel = `Measured ${cur.catalystRatio}% ${catName} Catalyst${
+        beforeSoap ? ' [BEFORE SOAP — MISTAKE!]' : ''
+      }`;
+      if (beforeSoap) {
+        setRoberQuote(
+          `HOLD EVERYTHING! You poured ${catName} BEFORE Dish Soap! Hit SEND IT to see why all the oxygen boils away without soap!`
+        );
+      } else {
+        setRoberQuote(
+          `Measured ${cur.catalystRatio}% ${catName} Catalyst! Hit SEND IT to test your mix!`
+        );
+      }
+    }
 
-      return {
-        ...prev,
-        peroxideVolumePercent: nextPeroxideVol,
-        soapVolumeMlPerLiter: nextSoapMl,
-        orbeezCount: nextOrbeezCount,
-        catalystRatio: nextCatalystRatio,
-        includeOrbeez: nextIncludeOrbeez,
-        additionOrder: nextOrder,
-        pouredLog: [...(prev.pouredLog || []), newRecord],
-      };
-    });
+    const newRecord: PouredStepRecord = {
+      id: `pour_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+      step,
+      amountLabel: logLabel,
+      timestamp: new Date().toLocaleTimeString([], { minute: '2-digit', second: '2-digit' }),
+    };
+
+    setConfig((prev) => ({
+      ...prev,
+      pouredLog: [...(prev.pouredLog || []), newRecord],
+    }));
+  }, []);
+
+  // Begin State 2 Pouring Phrase on PointerDown
+  const handleBeginPourPhrase = (step: IngredientStep, e: React.PointerEvent) => {
+    const clientX = e.clientX || window.innerWidth / 2;
+    const clientY = e.clientY || window.innerHeight - 40;
+    phraseRef.current = {
+      step,
+      startX: clientX,
+      startY: clientY,
+      startTime: performance.now(),
+      hasDragged: false,
+      insideTarget: true,
+      ticksPoured: 0,
+    };
+    setPointerPos({ x: clientX, y: clientY });
+    setHasDraggedFromBench(false);
+    setIsInsideVesselTarget(true);
+    setActivePhraseStep(step);
   };
 
-  // Empty Container to 0 L so the child can measure everything from scratch via Drag & Drop!
+  // Global State 2 Pointer Tracking, Continuous Pour Interval, & Honest Release Handler
+  useEffect(() => {
+    if (!activePhraseStep) return;
+
+    const handlePointerMove = (e: PointerEvent) => {
+      const p = phraseRef.current;
+      if (!p.step) return;
+      setPointerPos({ x: e.clientX, y: e.clientY });
+
+      const dist = Math.hypot(e.clientX - p.startX, e.clientY - p.startY);
+      if (dist > 24 && !p.hasDragged) {
+        p.hasDragged = true;
+        setHasDraggedFromBench(true);
+      }
+
+      if (p.hasDragged) {
+        const inside = isPointInsideVesselZone(e.clientX, e.clientY);
+        p.insideTarget = inside;
+        setIsInsideVesselTarget(inside);
+      }
+    };
+
+    const pourInterval = window.setInterval(() => {
+      const p = phraseRef.current;
+      if (!p.step) return;
+      const elapsed = performance.now() - p.startTime;
+
+      // Pour continuously if either:
+      // (a) Held stationary on the bench bottle for > 160ms, OR
+      // (b) Dragged upward into the honest 3D Vessel Target Zone!
+      const shouldPourTick = (!p.hasDragged && elapsed >= 160) || (p.hasDragged && p.insideTarget);
+      if (shouldPourTick) {
+        p.ticksPoured += 1;
+        applyIncrementalPour(p.step, false);
+      }
+    }, 115);
+
+    const handlePointerUpOrCancel = () => {
+      const p = phraseRef.current;
+      const finishedStep = p.step;
+      if (!finishedStep) return;
+
+      // Honest Release Rule:
+      // - If the user tapped quickly without dragging away, pour 1 standard scoop and commit.
+      // - If the user dragged into the vessel or held to pour (`ticksPoured > 0`) AND is inside the target on release, commit the phrase!
+      // - If the user dragged OUTSIDE the vessel target (`p.hasDragged && !p.insideTarget`) with 0 ticks poured, cancel honestly!
+      if (!p.hasDragged && p.ticksPoured === 0) {
+        applyIncrementalPour(finishedStep, true);
+        setTimeout(() => commitCompletedPhraseToReport(finishedStep), 20);
+      } else if (p.ticksPoured > 0) {
+        setTimeout(() => commitCompletedPhraseToReport(finishedStep), 20);
+      } else {
+        soundEngine.playUiClick(340);
+        setRoberQuote(
+          `Pour cancelled—you released the ${INGREDIENT_META[finishedStep].shortLabel} bottle outside the container!`
+        );
+      }
+
+      phraseRef.current.step = null;
+      setActivePhraseStep(null);
+      setHasDraggedFromBench(false);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUpOrCancel);
+    window.addEventListener('pointercancel', handlePointerUpOrCancel);
+
+    return () => {
+      window.clearInterval(pourInterval);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUpOrCancel);
+      window.removeEventListener('pointercancel', handlePointerUpOrCancel);
+    };
+  }, [activePhraseStep, applyIncrementalPour, commitCompletedPhraseToReport]);
+
+  // Empty Container to 0 L so the child can measure everything from scratch!
   const handleEmptyContainer = () => {
     soundEngine.playUiClick(420);
     setActiveResult(null);
@@ -315,7 +486,7 @@ export default function App() {
       pouredLog: [],
     }));
     setRoberQuote(
-      'Container emptied to 0 L! Now drag & drop any bottles from Section 3 onto the 3D container (or click SEND IT right now to see what happens when it’s empty!).'
+      'Container emptied to 0 L! Hold or drag any bottle on the bottom bench to measure in a fresh mix (or hit SEND IT on an empty container!).'
     );
   };
 
@@ -332,7 +503,7 @@ export default function App() {
     setActiveResult(null);
     setSoapInEyeActive(false);
     setRoberQuote(
-      `Loaded "${found.name}"! You can still drag & drop extra scoops into the container or uncheck safety gear to test mistakes!`
+      `Loaded "${found.name}"! Hold or drag bottles to adjust the amounts or uncheck Goggles to see what happens!`
     );
   };
 
@@ -408,7 +579,6 @@ export default function App() {
 
     const mishaps = evaluateExperimentMishaps(activeConfig, safetyGear, result);
 
-    // Check if they forgot Splash Goggles during a soapy/fizzy reaction!
     if (mishaps.some((m) => m.id === 'soap_in_eye')) {
       soundEngine.playSoapSplatSound();
       setSoapInEyeReason(
@@ -417,7 +587,6 @@ export default function App() {
       setSoapInEyeActive(true);
     }
 
-    // Play appropriate sound effect for what REALLY happened
     if (
       result.outcomeMode === 'empty_vessel_crickets' ||
       result.outcomeMode === 'no_catalyst_unreacted' ||
@@ -437,7 +606,6 @@ export default function App() {
       soundEngine.playEruptionSound(intensity, isSteamFlash, result.durationSeconds);
     }
 
-    // Update Mark Rober's commentary based on what REALLY happened
     if (result.outcomeMode === 'empty_vessel_crickets') {
       setRoberQuote(
         '*CRICKETS CHIRPING* 🦗 You pulled the lever on an EMPTY container! Your Science Report just logged "0 m — Forgot to Pour Anything!"'
@@ -448,7 +616,7 @@ export default function App() {
       );
     } else if (result.outcomeMode === 'no_peroxide_dud') {
       setRoberQuote(
-        'ZERO BOOM! You forgot to drag in the Hydrogen Peroxide fuel! Without H₂O₂, there is no extra oxygen atom to release!'
+        'ZERO BOOM! You forgot to pour the Hydrogen Peroxide fuel! Without H₂O₂, there is no extra oxygen atom to release!'
       );
     } else if (result.outcomeMode === 'no_catalyst_unreacted') {
       setRoberQuote(
@@ -480,12 +648,11 @@ export default function App() {
       );
     } else {
       setRoberQuote(
-        `AWESOME ERUPTION! ${result.peakHeightMeters}m tall and ${result.peakTempCelsius}°C! Check Section 4—your Science Report is updated with what really happened!`
+        `AWESOME ERUPTION! ${result.peakHeightMeters}m tall and ${result.peakTempCelsius}°C! Check the right-hand Science Report—updated with what really happened!`
       );
     }
   };
 
-  // Trigger Eruption — Unforced! Runs whatever the child actually measured in!
   const handleTriggerEruption = () => {
     if (countdownNumber !== null) return;
 
@@ -565,7 +732,6 @@ export default function App() {
     [config, safetyGear, activeResult, predictedResult, photos, scientistName]
   );
 
-  // 1-Click Direct Poster PNG Download from Section 4 of the Live Report Dock
   const handleQuickDownloadPoster = async () => {
     setIsDownloadingPoster(true);
     try {
@@ -599,29 +765,12 @@ export default function App() {
     ? ((scaleSpec.vesselCapacityLiters * config.peroxideVolumePercent) / 100).toFixed(1)
     : '0';
 
+  const isPouringActiveNow =
+    activePhraseStep !== null && (!hasDraggedFromBench || isInsideVesselTarget);
+
   return (
-    <div
-      className="relative w-screen h-screen overflow-hidden bg-slate-950 text-slate-100 select-none"
-      onDragOver={(e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        setIs3dDropHover(false);
-        const step = e.dataTransfer.getData('text/plain') as IngredientStep;
-        if (
-          step === 'peroxide' ||
-          step === 'soap' ||
-          step === 'orbeez' ||
-          step === 'catalyst'
-        ) {
-          handleMeasureInIngredient(step);
-        }
-        setDraggingStep(null);
-      }}
-    >
-      {/* 1. Full-Viewport 3D WebGL Scene + Superimposed AR Measurement Overlay */}
+    <div className="relative w-screen h-screen overflow-hidden bg-slate-950 text-slate-100 select-none">
+      {/* 1. Full-Viewport 3D WebGL Scene + Staged AR Measurement Overlay */}
       <ThreeViewport
         config={config}
         safetyGear={safetyGear}
@@ -636,54 +785,105 @@ export default function App() {
         onAutoPhotoCaptured={handleAutoPhotoCaptured}
       />
 
-      {/* Interactive 3D Container Drag-and-Drop Measuring Target Overlay */}
-      {draggingStep && (
-        <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            e.dataTransfer.dropEffect = 'copy';
-            if (!is3dDropHover) setIs3dDropHover(true);
-          }}
-          onDragLeave={() => setIs3dDropHover(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            setIs3dDropHover(false);
-            const step = (e.dataTransfer.getData('text/plain') ||
-              draggingStep) as IngredientStep;
-            if (step) {
-              handleMeasureInIngredient(step);
-            }
-            setDraggingStep(null);
-          }}
-          className="fixed inset-x-0 top-14 bottom-20 z-30 flex items-center justify-center pointer-events-auto"
-        >
+      {/* State 2 Honest Spatial Vessel Target & Live Graduated Pouring Gauge (Staged ONLY during active Pour Phrase!) */}
+      {activePhraseStep && (
+        <>
+          {/* Honest Spatial Boundary over the 3D Container */}
           <div
-            className={`px-8 py-6 rounded-2xl border-4 border-dashed text-center transition-transform shadow-2xl ${
-              is3dDropHover
-                ? 'border-amber-400 scale-105 bg-slate-950/90'
-                : 'border-sky-400/90 bg-slate-950/80'
+            className={`pointer-events-none fixed left-[18vw] right-[24vw] top-16 bottom-24 z-30 rounded-3xl border-2 border-dashed transition-colors flex flex-col items-center justify-between p-4 ${
+              isPouringActiveNow
+                ? 'border-emerald-400/90 bg-emerald-500/5'
+                : 'border-rose-400/80 bg-rose-500/5'
             }`}
           >
-            <div className="text-xs font-bold font-mono-tabular text-amber-400">
-              DRAG & DROP MEASURING TARGET
-            </div>
-            <div className="text-lg sm:text-xl font-extrabold font-display text-white mt-1">
-              🎯 Drop Here to Pour into the {scaleSpec.name}!
-            </div>
-            <div className="text-xs text-sky-300 mt-1 font-mono-tabular">
-              Currently inside: {measuredLiters}L Peroxide · {config.soapVolumeMlPerLiter} mL/L Soap ·{' '}
-              {config.catalystRatio}% Catalyst
+            <div
+              className="px-4 py-2 rounded-xl border border-slate-700 shadow-2xl text-center"
+              style={{ backgroundColor: 'rgba(9, 13, 22, 0.92)' }}
+            >
+              <div
+                className={`text-xs font-bold font-mono-tabular ${
+                  isPouringActiveNow ? 'text-emerald-400' : 'text-rose-400'
+                }`}
+              >
+                {isPouringActiveNow
+                  ? `POURING ${INGREDIENT_META[activePhraseStep].label.toUpperCase()} INTO ${scaleSpec.name.toUpperCase()}...`
+                  : 'OUTSIDE CONTAINER — MOVE BACK INSIDE TO POUR (OR RELEASE TO CANCEL)'}
+              </div>
+              <div className="text-sm font-extrabold text-white mt-0.5 font-mono-tabular">
+                {activePhraseStep === 'peroxide' &&
+                  `Volume: ${measuredLiters} L (${config.peroxideVolumePercent}% full)${
+                    config.peroxideVolumePercent > 100 ? ' — OVERFLOWING RIM!' : ''
+                  }`}
+                {activePhraseStep === 'soap' &&
+                  `Dish Soap: ${config.soapVolumeMlPerLiter} mL/L ${
+                    config.soapVolumeMlPerLiter < 28
+                      ? '(LOW — STEAM FLASH ZONE)'
+                      : config.soapVolumeMlPerLiter <= 58
+                      ? '(★ GOLDEN RATIO SWEET SPOT ★)'
+                      : config.soapVolumeMlPerLiter >= 75
+                      ? '(⚠️ SLIME SLUG OVERDOSE!)'
+                      : '(EXTRA BUBBLY)'
+                  }`}
+                {activePhraseStep === 'orbeez' &&
+                  `Orbeez Beads: ${(config.orbeezCount || 0).toLocaleString()} beads`}
+                {activePhraseStep === 'catalyst' &&
+                  `Catalyst Load: ${config.catalystRatio}% (${
+                    config.catalystType === 'potassium_iodide' ? 'Potassium Iodide' : 'Warm Yeast'
+                  })`}
+              </div>
+
+              {/* Graduated Cylinder Bar with Sweet Spot & Overdose Zones */}
+              <div className="w-64 h-3 bg-slate-900 rounded-full overflow-hidden border border-slate-700 mt-1.5 relative">
+                {activePhraseStep === 'soap' && (
+                  <div
+                    className="absolute inset-y-0 bg-emerald-400/25 border-x border-emerald-400"
+                    style={{ left: '29%', width: '24%' }}
+                    title="Golden Ratio Sweet Spot (32-58 mL/L)"
+                  />
+                )}
+                <div
+                  className="h-full transition-all duration-75"
+                  style={{
+                    width: `${
+                      activePhraseStep === 'peroxide'
+                        ? Math.min(100, (config.peroxideVolumePercent / 125) * 100)
+                        : activePhraseStep === 'soap'
+                        ? Math.min(100, (config.soapVolumeMlPerLiter / 110) * 100)
+                        : activePhraseStep === 'orbeez'
+                        ? Math.min(100, ((config.orbeezCount || 0) / 10000) * 100)
+                        : Math.min(100, config.catalystRatio)
+                    }%`,
+                    backgroundColor: INGREDIENT_META[activePhraseStep].color,
+                  }}
+                />
+              </div>
+              <div className="text-[10px] text-slate-400 mt-1">
+                Hold tension to keep pouring · Release to lock in amount
+              </div>
             </div>
           </div>
-        </div>
+
+          {/* Tilted Pouring Bottle Follower attached to Pointer */}
+          <div
+            className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 px-3 py-1.5 rounded-xl border-2 shadow-2xl font-bold text-xs whitespace-nowrap transition-transform"
+            style={{
+              left: pointerPos.x,
+              top: pointerPos.y - 28,
+              backgroundColor: 'rgba(15, 23, 42, 0.95)',
+              borderColor: INGREDIENT_META[activePhraseStep].color,
+              color: '#ffffff',
+              transform: `translate(-50%, -50%) rotate(${isPouringActiveNow ? '-28deg' : '0deg'})`,
+            }}
+          >
+            🧪 {INGREDIENT_META[activePhraseStep].shortLabel}{' '}
+            {isPouringActiveNow ? '💧 Pouring...' : '⏸ Paused'}
+          </div>
+        </>
       )}
 
       {/* Hilarious "SPLAT! SOAP & FOAM IN YOUR EYES!" Overlay when Splash Goggles are forgotten! */}
       {soapInEyeActive && (
         <div className="fixed inset-0 z-40 pointer-events-auto flex flex-col items-center justify-center p-4">
-          {/* Translucent Soap Suds & Colored Foam Blobs Across the Screen */}
           <div
             className="pointer-events-none absolute -top-12 -left-12 w-72 h-72 rounded-full opacity-85"
             style={{
@@ -713,7 +913,6 @@ export default function App() {
             }}
           />
 
-          {/* Center Interactive Wipe-Your-Eyes Card */}
           <div
             className="relative z-10 max-w-md w-full rounded-2xl border-2 border-amber-400 p-5 text-center shadow-2xl space-y-3"
             style={{ backgroundColor: 'rgba(9, 13, 22, 0.96)' }}
@@ -862,7 +1061,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* 3. The Interactive Live Science Report Dock (Drag & Drop Measuring + Live Results & Bloopers) */}
+      {/* 3. The Interactive Live Science Report Dock & Slim Lab Bench */}
       <LiveScienceReportDock
         scientistName={scientistName}
         onChangeScientistName={setScientistName}
@@ -895,8 +1094,8 @@ export default function App() {
         onUpdateConfig={handleUpdateConfig}
         onToggleSafetyGear={handleToggleSafetyGear}
         onEquipAllSafety={handleEquipAllRequiredPpe}
-        onMeasureInIngredient={handleMeasureInIngredient}
-        onStartDragIngredient={setDraggingStep}
+        activePhraseStep={activePhraseStep}
+        onBeginPourPhrase={handleBeginPourPhrase}
         onEmptyContainer={handleEmptyContainer}
         onApplyPreset={handleApplyPreset}
         onTriggerEruption={handleTriggerEruption}

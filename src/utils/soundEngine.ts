@@ -85,6 +85,35 @@ class LabSoundEngine {
     noise.start(now);
   }
 
+  // Rising-pitch acoustic glug as the vessel fills during continuous State 2 press/drag pouring
+  public playPourPulse(
+    step: 'peroxide' | 'soap' | 'orbeez' | 'catalyst',
+    fillRatio: number
+  ) {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = step === 'orbeez' ? 'triangle' : 'sine';
+
+    const basePitch =
+      step === 'peroxide' ? 280 : step === 'soap' ? 220 : step === 'orbeez' ? 520 : 380;
+    const pitch = basePitch + Math.min(1.4, Math.max(0, fillRatio)) * 420;
+
+    osc.frequency.setValueAtTime(pitch, now);
+    osc.frequency.exponentialRampToValueAtTime(pitch * 1.18, now + 0.09);
+
+    gain.gain.setValueAtTime(0.08, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.11);
+  }
+
   // Warning beep when safety hazard is triggered
   public playSafetyAlert() {
     const ctx = this.ensureContext();
