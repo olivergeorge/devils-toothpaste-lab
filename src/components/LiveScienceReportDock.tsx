@@ -41,6 +41,8 @@ interface LiveScienceReportDockProps {
   safetyAssessment: SafetyHazardAssessment;
   activeResult: ReactionSimulationResult | null;
   predictedResult: ReactionSimulationResult;
+  /** The kid's bet from Call Your Shot (metres), or null if he hasn't made one. */
+  yourGuessM?: number | null;
   activeMishaps: LabMishap[];
   photos: CapturedPhoto[];
   isCollapsed: boolean;
@@ -87,6 +89,7 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
   safetyAssessment,
   activeResult,
   predictedResult,
+  yourGuessM = null,
   activeMishaps,
   photos,
   isCollapsed,
@@ -113,7 +116,6 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
 }) => {
   const [isSideReportOpen, setIsSideReportOpen] = useState(true);
 
-  const displayedTelemetry = activeResult || predictedResult;
   const scaleSpec = SCALE_ENVIRONMENTS[config.scaleId];
 
   const hasPeroxide = config.additionOrder.includes('peroxide') && config.peroxideVolumePercent > 0;
@@ -286,8 +288,18 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
                 <strong className="text-amber-300">
                   {config.catalystType === 'potassium_iodide' ? 'KI' : 'Yeast'}
                 </strong>
-                . Predicted height:{' '}
-                <strong className="text-amber-400">{predictedResult.peakHeightMeters}m</strong>.
+                .{' '}
+                {yourGuessM !== null ? (
+                  <>
+                    Your guess:{' '}
+                    <strong className="text-amber-400">
+                      {yourGuessM >= 10 ? Math.round(yourGuessM) : yourGuessM.toFixed(1)}m
+                    </strong>
+                    .
+                  </>
+                ) : (
+                  <span className="text-sky-300">Make your guess with the rocket 🚀</span>
+                )}
               </p>
             </div>
 
@@ -382,37 +394,37 @@ export const LiveScienceReportDock: React.FC<LiveScienceReportDockProps> = ({
                   4. WHAT REALLY HAPPENED
                 </span>
                 <span className="text-[9px] font-mono-tabular text-amber-400">
-                  {activeResult ? 'UPDATED ✓' : 'LIVE PREVIEW'}
+                  {activeResult ? 'UPDATED ✓' : 'NOT TESTED YET'}
                 </span>
               </div>
 
               <div className="text-[11px] font-bold text-white leading-tight">
-                {displayedTelemetry.outcomeTitle}
+                {activeResult ? activeResult.outcomeTitle : 'Press SEND IT! to find out…'}
               </div>
 
               <div className="grid grid-cols-3 gap-1 text-center py-1 bg-slate-900 rounded border border-slate-800">
                 <div>
                   <span className="text-[9px] text-slate-400 block">HEIGHT</span>
                   <span className="text-xs font-bold font-mono-tabular text-amber-400">
-                    {displayedTelemetry.peakHeightMeters}m
+                    {activeResult ? `${activeResult.peakHeightMeters}m` : '?'}
                   </span>
                 </div>
                 <div>
                   <span className="text-[9px] text-slate-400 block">HEAT</span>
                   <span className="text-xs font-bold font-mono-tabular text-rose-400">
-                    {displayedTelemetry.peakTempCelsius}°C
+                    {activeResult ? `${activeResult.peakTempCelsius}°C` : '?'}
                   </span>
                 </div>
                 <div>
                   <span className="text-[9px] text-slate-400 block">FOAM</span>
                   <span className="text-xs font-bold font-mono-tabular text-sky-400">
-                    {displayedTelemetry.foamVolumeCubicMeters}m³
+                    {activeResult ? `${activeResult.foamVolumeCubicMeters}m³` : '?'}
                   </span>
                 </div>
               </div>
 
               <div className="text-[10px] text-sky-300 text-center truncate">
-                {getSquirrelComparison(displayedTelemetry.peakHeightMeters)}
+                {activeResult ? getSquirrelComparison(activeResult.peakHeightMeters) : '…'}
               </div>
 
               {activeMishaps.length > 0 && (

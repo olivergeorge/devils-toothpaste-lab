@@ -74,8 +74,9 @@ peak temperature, total O₂.
 
 **Integration with the existing engine** — `simulateReactionPhysics` keeps its outcome
 classification (empty vessel, no catalyst, order mistakes, sludge, the funny titles and
-explanations) but takes `peakTempCelsius`, `oxygenGasLiters`, `peakHeightMeters`,
-`steamIntensity` and `durationSeconds` from the model, and returns the series on a new
+explanations) but takes `peakTempCelsius`, `oxygenGasLiters` and `peakHeightMeters` (and
+`steamIntensity` for the fizz branch) from the model. `durationSeconds` stays per outcome
+(it sets sound and particle length); the model's own run length sets the playback mapping, and returns the series on a new
 optional `ReactionSimulationResult.timeSeries` field. The steam-flash branch is decided by the
 model's peak temperature rather than a hand rule.
 
@@ -108,6 +109,13 @@ window of clamp(model settle time, 2 s, 7 s), matching today's show length). Exp
 
 Scrubbing in `review` drives the panel and the in-scene height/temperature readouts only. Rewinding
 the 3D particle system is **out of scope** (spawn-based particles are not reversible).
+
+## No spoilers before the run
+
+Found during planning: the dock already showed "Predicted height" and a "live preview" of
+height/heat/foam before any run, which would hand him the answer. Before a run the dock now
+shows his guess (or "Make your guess with the rocket 🚀") and "?" for the results. The 3D
+height badge was already hidden until the eruption.
 
 ## Testing
 

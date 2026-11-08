@@ -10,6 +10,8 @@ import {
   ScaleEnvironmentId,
 } from '../types/chemistry';
 import { DYE_COLORS, SCALE_ENVIRONMENTS, evaluateSafetyHazards } from '../utils/chemistryEngine';
+import { modelTimeAtPlayback, sampleAt } from '../utils/reactionModel';
+import { TIME_AXIS_MAX_S } from '../utils/betScoring';
 import { createFoamBumpTexture, createTestPadGridTexture } from '../three/proceduralTextures';
 import {
   ScientistAvatarRig,
@@ -107,6 +109,10 @@ export interface ThreeViewportProps {
   showArMeasures?: boolean;
   onRegisterSnapshotFn: (fn: () => string) => void;
   onAutoPhotoCaptured?: (dataUrl: string, caption: string) => void;
+  /** Model seconds reached during eruption playback (~20 Hz); `done` once the graph window is drawn. */
+  onPlaybackTick?: (modelT: number, done: boolean) => void;
+  /** When set after a run, the AR readouts show this model moment (review scrubbing). */
+  scrubModelS?: number | null;
 }
 
 export const ThreeViewport: React.FC<ThreeViewportProps> = ({
@@ -121,6 +127,8 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
   showArMeasures = true,
   onRegisterSnapshotFn,
   onAutoPhotoCaptured,
+  onPlaybackTick,
+  scrubModelS = null,
 }) => {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
 
@@ -144,6 +152,12 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
 
   const safetyGearRef = useRef(safetyGear);
   safetyGearRef.current = safetyGear;
+
+  const onPlaybackTickRef = useRef(onPlaybackTick);
+  onPlaybackTickRef.current = onPlaybackTick;
+  const scrubModelSRef = useRef(scrubModelS);
+  scrubModelSRef.current = scrubModelS;
+  const playbackReportRef = useRef({ lastAt: -1, done: false });
 
   const activeResultRef = useRef(activeResult);
   activeResultRef.current = activeResult;
@@ -714,16 +728,47 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
       if (rState.isRunning && currentResult) {
         rState.elapsed += dt;
 
-        // Ramp live height & temperature smoothly toward peak during the reaction
-        const rampProgress = Math.min(1, rState.elapsed / 1.85);
-        const easedProgress = 1 - Math.pow(1 - rampProgress, 3);
-        rState.currentLiveHeightMeters = Number(
-          (currentResult.peakHeightMeters * easedProgress).toFixed(1)
-        );
-        rState.currentLiveTempCelsius = Math.round(
-          currentConfig.chemicalTempCelsius +
-            (currentResult.peakTempCelsius - currentConfig.chemicalTempCelsius) * easedProgress
-        );
+        const series = currentResult.timeSeries;
+        if (series) {
+          // Follow the reaction model: live readouts hold the highest point reached so far,
+          // or show the exact moment being scrubbed in review.
+          const modelT = modelTimeAtPlayback(series, rState.elapsed);
+          const scrub = scrubModelSRef.current;
+          if (scrub !== null && scrub !== undefined) {
+            const at = sampleAt(series, scrub);
+            rState.currentLiveHeightMeters = Number(at.heightM.toFixed(1));
+            rState.currentLiveTempCelsius = Math.round(at.tempC);
+          } else {
+            const at = sampleAt(series, Math.min(modelT, series.settleS));
+            rState.currentLiveHeightMeters = Math.max(
+              rState.currentLiveHeightMeters,
+              Number(at.heightM.toFixed(1))
+            );
+            rState.currentLiveTempCelsius = Math.max(
+              rState.currentLiveTempCelsius,
+              Math.round(at.tempC)
+            );
+          }
+
+          const report = playbackReportRef.current;
+          const graphEndS = Math.min(series.settleS, TIME_AXIS_MAX_S);
+          if (!report.done && (rState.elapsed - report.lastAt >= 0.05 || modelT >= graphEndS)) {
+            report.lastAt = rState.elapsed;
+            report.done = modelT >= graphEndS;
+            onPlaybackTickRef.current?.(Math.min(modelT, graphEndS), report.done);
+          }
+        } else {
+          // Fallback: ramp smoothly toward the peak
+          const rampProgress = Math.min(1, rState.elapsed / 1.85);
+          const easedProgress = 1 - Math.pow(1 - rampProgress, 3);
+          rState.currentLiveHeightMeters = Number(
+            (currentResult.peakHeightMeters * easedProgress).toFixed(1)
+          );
+          rState.currentLiveTempCelsius = Math.round(
+            currentConfig.chemicalTempCelsius +
+              (currentResult.peakTempCelsius - currentConfig.chemicalTempCelsius) * easedProgress
+          );
+        }
 
         // Auto-capture a peak eruption photo at t = 2.1s
         if (!rState.autoPhotoTakenForRun && rState.elapsed >= 2.1 && onAutoPhotoRef.current) {
@@ -1228,6 +1273,9 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     const s = sceneRefs.current;
     s.reactionState.isRunning = true;
     s.reactionState.elapsed = 0;
+    s.reactionState.currentLiveHeightMeters = 0;
+    s.reactionState.currentLiveTempCelsius = configRef.current.chemicalTempCelsius;
+    playbackReportRef.current = { lastAt: -1, done: false };
     s.reactionState.isCleaningUp = false;
     s.reactionState.autoPhotoTakenForRun = false;
   }, [eruptionTriggerCount]);

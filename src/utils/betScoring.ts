@@ -71,7 +71,7 @@ export function explainBiggestCause(
     default:
       break;
   }
-  if (config.catalystType === 'yeast' && result.peakTempCelsius >= 55) {
+  if (config.catalystType === 'yeast' && result.peakTempCelsius >= 58) {
     return 'The yeast got too hot and slowed down!';
   }
   if (config.peroxideConcentration >= 30) return 'Stronger peroxide = way more oxygen!';

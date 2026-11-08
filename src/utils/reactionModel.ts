@@ -234,3 +234,13 @@ export function sampleAt(series: ReactionTimeSeries, t: number): ReactionSample 
     heightM: lerp(a.heightM, b.heightM),
   };
 }
+
+/** Real seconds the 3D show takes to play the whole model run (2–7 s, like the old show). */
+export function playbackWindowS(series: ReactionTimeSeries): number {
+  return Math.min(7, Math.max(2, series.settleS));
+}
+
+/** Model time reached after `elapsedS` real seconds of 3D playback. */
+export function modelTimeAtPlayback(series: ReactionTimeSeries, elapsedS: number): number {
+  return (elapsedS * series.settleS) / playbackWindowS(series);
+}
