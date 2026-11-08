@@ -110,6 +110,28 @@ export interface ReactionSimulationResult {
   fizzIntensity: number; // 0 to 1
   durationSeconds: number;
   roberComparisonText: string;
+  timeSeries?: ReactionTimeSeries;
+}
+
+/** One moment of the time-stepped reaction model (real seconds). */
+export interface ReactionSample {
+  t: number;
+  peroxideFraction: number; // 1 = untouched, 0 = all used up
+  oxygenLiters: number; // cumulative O₂ released
+  foamLiters: number; // foam + spray currently above the vessel
+  tempC: number;
+  heightM: number;
+}
+
+export interface ReactionTimeSeries {
+  samples: ReactionSample[];
+  timeToPeakS: number;
+  peakHeightM: number;
+  peakTempC: number;
+  totalOxygenLiters: number;
+  settleS: number; // when the show is basically over
+  steamIntensity: number; // 0..1
+  boiled: boolean; // liquid hit 100 °C and made steam
 }
 
 export interface PresetExperiment {
