@@ -1,0 +1,6 @@
+{
+  "name": "Elephant's Toothpaste 3D Lab",
+  "description": "An interactive 3D chemistry and physics sandbox inspired by Mark Rober's record-breaking Elephant's Toothpaste, Devil's Toothpaste, and Foam Volcano experiments.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
