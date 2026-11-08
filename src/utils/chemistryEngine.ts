@@ -1,3 +1,4 @@
+import { runReactionModel, soapQualityFactor as soapQualityFactorFor } from './reactionModel';
 import {
   DyeColorId,
   ExperimentConfig,
@@ -5,6 +6,7 @@ import {
   LabMishap,
   PresetExperiment,
   ReactionSimulationResult,
+  ReactionTimeSeries,
   SafetyGearState,
   SafetyHazardAssessment,
   ScaleEnvironmentId,
@@ -402,6 +404,18 @@ export function evaluateSafetyHazards(
 }
 
 export function simulateReactionPhysics(config: ExperimentConfig): ReactionSimulationResult {
+  const series = runReactionModel(config);
+  return { ...classifyOutcome(config, series), timeSeries: series };
+}
+
+/**
+ * Picks the outcome story (empty vessel, order mistake, steam flash, sludge, geyser...) and
+ * fills in its numbers from the time-stepped reaction model.
+ */
+function classifyOutcome(
+  config: ExperimentConfig,
+  series: ReactionTimeSeries
+): ReactionSimulationResult {
   const scale = SCALE_ENVIRONMENTS[config.scaleId];
   const order = config.additionOrder;
 
@@ -533,30 +547,15 @@ export function simulateReactionPhysics(config: ExperimentConfig): ReactionSimul
     (config.catalystType === 'potassium_iodide' ? 1.35 : 0.62) *
     (0.35 + 0.65 * (config.catalystRatio / 100));
 
-  // Temperature kinetics factor (Arrhenius-inspired boost)
-  const tempKineticsFactor = 1 + (config.chemicalTempCelsius - 20) * 0.018;
-
-  // Exothermic temperature rise: ΔH = -98.2 kJ/mol H2O2
-  const baseDeltaTemp =
-    config.peroxideConcentration *
-    1.55 *
-    (config.catalystType === 'potassium_iodide' ? 1.15 : 0.72) *
-    (config.catalystRatio / 100);
-  const peakTempCelsius = Math.min(118, Math.round(config.chemicalTempCelsius + baseDeltaTemp));
-
-  // Total O2 gas generated at STP/hot expansion (liters)
-  const oxygenGasLiters = Math.round(
-    totalMolesH2O2 * 0.5 * 24.5 * Math.min(1.0, catalystEfficiency) * (1 + peakTempCelsius / 273)
-  );
+  // Numbers from the time-stepped reaction model (see reactionModel.ts)
+  const peakTempCelsius = series.peakTempC;
+  const oxygenGasLiters = series.totalOxygenLiters;
 
   // 3. Check Order of Addition Mistake: Catalyst added BEFORE Dish Soap, or No Dish Soap!
   const catalystBeforeSoap = !hasSoap || (catalystIdx !== -1 && soapIdx !== -1 && catalystIdx < soapIdx);
   if (catalystBeforeSoap) {
     const partialLateSoap = hasSoap && catalystIdx < soapIdx ? 0.14 : 0.03;
-    const rawFizzHeight =
-      scale.baseHeightMultiplier *
-      (0.35 + (config.peroxideConcentration / 50) * 0.9) *
-      catalystEfficiency;
+    const rawFizzHeight = series.peakHeightM;
 
     return {
       outcomeMode: 'catalyst_first_fizz_boiloff',
@@ -574,7 +573,7 @@ export function simulateReactionPhysics(config: ExperimentConfig): ReactionSimul
       oxygenGasLiters,
       eruptionVelocityMps: Number((rawFizzHeight * 1.8).toFixed(1)),
       foamTrapEfficiency: partialLateSoap,
-      steamIntensity: Math.min(1, peakTempCelsius / 95),
+      steamIntensity: series.steamIntensity,
       fizzIntensity: 1.0,
       durationSeconds: 5.5,
       roberComparisonText:
@@ -583,16 +582,8 @@ export function simulateReactionPhysics(config: ExperimentConfig): ReactionSimul
   }
 
   // 4. Check Exothermic Steam Vaporization Flash (High H2O2 + KI + High Temp + Low Soap)
-  if (
-    peakTempCelsius >= 98 &&
-    config.peroxideConcentration >= 35 &&
-    config.catalystType === 'potassium_iodide' &&
-    config.soapVolumeMlPerLiter < 28
-  ) {
-    const steamJetHeight =
-      scale.baseHeightMultiplier *
-      scale.nozzleConstrictionFactor *
-      (1.8 + (config.peroxideConcentration / 50) * 2.2);
+  if (series.boiled && config.soapVolumeMlPerLiter < 28) {
+    const steamJetHeight = series.peakHeightM;
 
     return {
       outcomeMode: 'steam_flash_vaporization',
@@ -614,29 +605,9 @@ export function simulateReactionPhysics(config: ExperimentConfig): ReactionSimul
     };
   }
 
-  // 5. Evaluate Dish Soap Precision Curve (Optimal window: 35 to 55 mL/L)
-  const soapDiff = Math.abs(config.soapVolumeMlPerLiter - 45);
-  let soapQualityFactor = 1.0;
-  if (config.soapVolumeMlPerLiter < 30) {
-    soapQualityFactor = Math.max(0.25, config.soapVolumeMlPerLiter / 35);
-  } else if (config.soapVolumeMlPerLiter > 60) {
-    // Too much soap makes heavy, viscous sludge
-    soapQualityFactor = Math.max(0.45, 1 - (config.soapVolumeMlPerLiter - 60) / 110);
-  } else {
-    // Sweet spot peak around 45 mL/L
-    soapQualityFactor = 1.0 - (soapDiff / 30) * 0.15;
-  }
-
-  const orbeezBoost = hasOrbeez ? 1.15 + Math.min(0.25, (config.orbeezCount || 2500) / 25000) : 1.0;
-  const rawPeakHeight =
-    scale.baseHeightMultiplier *
-    scale.nozzleConstrictionFactor *
-    (0.4 + Math.pow(config.peroxideConcentration / 15, 1.35)) *
-    catalystEfficiency *
-    tempKineticsFactor *
-    soapQualityFactor *
-    orbeezBoost *
-    (0.5 + 0.5 * (config.peroxideVolumePercent / 100));
+  // 5. Dish soap precision curve (sweet spot ~45 mL/L) and the model's plume height
+  const soapQualityFactor = soapQualityFactorFor(config.soapVolumeMlPerLiter);
+  const rawPeakHeight = series.peakHeightM;
 
   const peakHeightMeters = Number(Math.max(0.3, rawPeakHeight).toFixed(2));
   const foamTrapEfficiency = Number(Math.min(0.98, Math.max(0.2, soapQualityFactor)).toFixed(2));
