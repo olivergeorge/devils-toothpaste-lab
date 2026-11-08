@@ -4,6 +4,23 @@ export type ScaleEnvironmentId =
   | 'steel_flask'
   | 'outdoor_crater';
 
+export type LabLocationId =
+  | 'crunchlabs_warehouse'
+  | 'suburban_backyard'
+  | 'science_gymnasium'
+  | 'desert_proving_ground';
+
+export interface LabLocationSpec {
+  id: LabLocationId;
+  name: string;
+  shortName: string;
+  subtitle: string;
+  skyHex: number;
+  fogHex: number;
+  fogDensity: number;
+  groundColorHex: number;
+}
+
 export type CatalystType = 'yeast' | 'potassium_iodide';
 
 export type IngredientStep = 'peroxide' | 'soap' | 'orbeez' | 'catalyst';
@@ -82,6 +99,7 @@ export interface PouredStepRecord {
 
 export interface ExperimentConfig {
   scaleId: ScaleEnvironmentId;
+  locationId?: LabLocationId;
   peroxideConcentration: number; // 3% to 50%
   peroxideVolumePercent: number; // 0% to 125% of vessel capacity (measured via drag & drop!)
   catalystType: CatalystType;

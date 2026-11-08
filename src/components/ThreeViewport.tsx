@@ -5,19 +5,29 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import {
   CameraPresetId,
   ExperimentConfig,
+  IngredientStep,
+  LabLocationId,
   ReactionSimulationResult,
   SafetyGearState,
   ScaleEnvironmentId,
 } from '../types/chemistry';
-import { DYE_COLORS, SCALE_ENVIRONMENTS, evaluateSafetyHazards } from '../utils/chemistryEngine';
+import {
+  DYE_COLORS,
+  INGREDIENT_META,
+  LAB_LOCATIONS,
+  SCALE_ENVIRONMENTS,
+  evaluateSafetyHazards,
+} from '../utils/chemistryEngine';
 import { createFoamBumpTexture, createTestPadGridTexture } from '../three/proceduralTextures';
 import {
   ScientistAvatarRig,
+  SupplyStationRig,
   VesselSpawnMetrics,
+  createAllLocationEnvironments,
   createKiddiePoolRig,
   createLabBeakerRig,
+  createLabSupplyStations,
   createOutdoorCraterRig,
-  createOutdoorEnvironment,
   createScientistAvatar,
   createSteelFlaskRig,
   syncScientistAvatarPpe,
@@ -29,10 +39,13 @@ const _color = new THREE.Color();
 const _targetCamPos = new THREE.Vector3();
 const _targetLookAt = new THREE.Vector3();
 const _projVec = new THREE.Vector3();
+const _raycaster = new THREE.Raycaster();
+const _pointerNdc = new THREE.Vector2();
 
-const FOAM_INSTANCE_COUNT = 520;
+const FOAM_INSTANCE_COUNT = 1280;
 const STEAM_INSTANCE_COUNT = 140;
-const ORBEEZ_INSTANCE_COUNT = 160;
+const ORBEEZ_INSTANCE_COUNT = 180;
+const MOUND_LOBE_COUNT = 36;
 
 interface FoamParticle {
   active: boolean;
@@ -74,6 +87,16 @@ interface OrbeezParticle {
   hue: number;
 }
 
+interface ScientistErrand {
+  type: 'walk_to_point' | 'fetch_ingredient' | 'fetch_safety';
+  phase: 'to_station' | 'to_vessel' | 'returning' | 'walking';
+  targetX: number;
+  targetZ: number;
+  returnX: number;
+  returnZ: number;
+  step?: IngredientStep;
+}
+
 const AR_BENCHMARKS = [
   { meters: 1.5, label: '1.5m · Lab Table' },
   { meters: 3.0, label: '3.0m · Basketball Hoop' },
@@ -103,10 +126,14 @@ export interface ThreeViewportProps {
   eruptionTriggerCount: number;
   cleanupTriggerCount: number;
   pourStepTrigger: { step: string; count: number };
+  fetchErrandTrigger?: { type: 'ingredient' | 'safety'; step?: IngredientStep; count: number };
   cameraPreset: CameraPresetId;
   showArMeasures?: boolean;
   onRegisterSnapshotFn: (fn: () => string) => void;
   onAutoPhotoCaptured?: (dataUrl: string, caption: string) => void;
+  onUpdateStandBackMeters?: (meters: number, isManualWalk?: boolean) => void;
+  onScientistFetchedIngredient?: (step: IngredientStep) => void;
+  onScientistFetchedSafety?: () => void;
 }
 
 export const ThreeViewport: React.FC<ThreeViewportProps> = ({
@@ -117,10 +144,14 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
   eruptionTriggerCount,
   cleanupTriggerCount,
   pourStepTrigger,
+  fetchErrandTrigger,
   cameraPreset,
   showArMeasures = true,
   onRegisterSnapshotFn,
   onAutoPhotoCaptured,
+  onUpdateStandBackMeters,
+  onScientistFetchedIngredient,
+  onScientistFetchedSafety,
 }) => {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
 
@@ -135,6 +166,9 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
 
   const arAvatarBadgeRef = useRef<HTMLDivElement | null>(null);
   const arAvatarTextRef = useRef<HTMLSpanElement | null>(null);
+
+  const arChemCartBadgeRef = useRef<HTMLDivElement | null>(null);
+  const arSafetyRackBadgeRef = useRef<HTMLDivElement | null>(null);
 
   const arBenchmarkRefs = useRef<(HTMLDivElement | null)[]>([]);
 
@@ -157,16 +191,32 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
   const onAutoPhotoRef = useRef(onAutoPhotoCaptured);
   onAutoPhotoRef.current = onAutoPhotoCaptured;
 
+  const onUpdateStandBackRef = useRef(onUpdateStandBackMeters);
+  onUpdateStandBackRef.current = onUpdateStandBackMeters;
+
+  const onFetchedIngredientRef = useRef(onScientistFetchedIngredient);
+  onFetchedIngredientRef.current = onScientistFetchedIngredient;
+
+  const onFetchedSafetyRef = useRef(onScientistFetchedSafety);
+  onFetchedSafetyRef.current = onScientistFetchedSafety;
+
   // Mutable scene references for prop-driven updates
   const sceneRefs = useRef<{
+    scene?: THREE.Scene;
+    groundMat?: THREE.MeshStandardMaterial;
     rigs?: Record<ScaleEnvironmentId, { group: THREE.Group; metrics: VesselSpawnMetrics }>;
+    locationGroups?: Record<LabLocationId, THREE.Group>;
+    supplyStations?: SupplyStationRig;
     avatar?: ScientistAvatarRig;
+    walkTargetMarker?: THREE.Group;
     safetyRingMesh?: THREE.Mesh;
     safetyZoneDisc?: THREE.Mesh;
     arRulerGroup?: THREE.Group;
     arPeakMarkerGroup?: THREE.Group;
     foamMesh?: THREE.InstancedMesh;
     foamMat?: THREE.MeshPhysicalMaterial;
+    accumulatedMoundGroup?: THREE.Group;
+    accumulatedMoundMat?: THREE.MeshPhysicalMaterial;
     steamMesh?: THREE.InstancedMesh;
     orbeezMesh?: THREE.InstancedMesh;
     pourStreamMesh?: THREE.Mesh;
@@ -174,6 +224,16 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     cameraTransitionActive: boolean;
     desiredCamPos: THREE.Vector3;
     desiredLookAt: THREE.Vector3;
+    avatarWalkState: {
+      x: number;
+      z: number;
+      targetX: number;
+      targetZ: number;
+      walkPhase: number;
+      isWalking: boolean;
+      errand: ScientistErrand | null;
+      keysPressed: Set<string>;
+    };
     reactionState: {
       isRunning: boolean;
       elapsed: number;
@@ -184,11 +244,24 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
       pourTimer: number;
       pourColorHex: string;
       autoPhotoTakenForRun: boolean;
+      collectedFoamVolume: number; // Accumulates and NEVER fades until hosed down!
+      targetMoundScale: number;
+      currentMoundScale: number;
     };
   }>({
     cameraTransitionActive: false,
     desiredCamPos: new THREE.Vector3(0, 6, 12),
     desiredLookAt: new THREE.Vector3(0, 2, 0),
+    avatarWalkState: {
+      x: 0,
+      z: 3.5,
+      targetX: 0,
+      targetZ: 3.5,
+      walkPhase: 0,
+      isWalking: false,
+      errand: null,
+      keysPressed: new Set(),
+    },
     reactionState: {
       isRunning: false,
       elapsed: 0,
@@ -199,6 +272,9 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
       pourTimer: 0,
       pourColorHex: '#38bdf8',
       autoPhotoTakenForRun: false,
+      collectedFoamVolume: 0,
+      targetMoundScale: 0,
+      currentMoundScale: 0,
     },
   });
 
@@ -216,9 +292,12 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
         ? 3.1
         : 3.8;
 
+    const avState = sceneRefs.current.avatarWalkState;
+
     if (preset === 'vr_first_person') {
-      const zDist = Math.max(3.2, Math.min(28, standBack * 0.72));
-      _targetCamPos.set(0, 1.66, zDist - 0.25);
+      const camX = avState ? avState.x : 0;
+      const camZ = avState ? avState.z - 0.25 : Math.max(3.2, Math.min(28, standBack * 0.72));
+      _targetCamPos.set(camX, 1.66, camZ);
       _targetLookAt.set(0, 1.8 * (scaleFactor * 0.65), 0);
     } else if (preset === 'vessel_closeup') {
       _targetCamPos.set(2.2 * scaleFactor, 2.5 * scaleFactor, 3.6 * scaleFactor);
@@ -227,7 +306,7 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
       _targetCamPos.set(-6.5 * scaleFactor, 11.5 * scaleFactor, 9.5 * scaleFactor);
       _targetLookAt.set(0, 2.4 * scaleFactor, 0);
     } else {
-      _targetCamPos.set(4.2 * scaleFactor, 3.8 * scaleFactor, 7.2 * scaleFactor);
+      _targetCamPos.set(4.5 * scaleFactor, 4.0 * scaleFactor, 7.6 * scaleFactor);
       _targetLookAt.set(0, 1.4 * scaleFactor, 0);
     }
   };
@@ -269,9 +348,9 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
 
     // 2. Scene, Sky/Horizon Fog, & RoomEnvironment PMREM Reflection
     const scene = new THREE.Scene();
-    const horizonColor = new THREE.Color(0x172b4d);
-    scene.background = horizonColor;
-    scene.fog = new THREE.FogExp2(0x172b4d, 0.0085);
+    const initialLoc = LAB_LOCATIONS[configRef.current.locationId || 'crunchlabs_warehouse'];
+    scene.background = new THREE.Color(initialLoc.skyHex);
+    scene.fog = new THREE.FogExp2(initialLoc.fogHex, initialLoc.fogDensity);
 
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
@@ -299,7 +378,7 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     });
 
     // 4. Studio 3-Point + Warm/Cool Hemisphere Lighting Rig
-    const hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x1e293b, 1.1);
+    const hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x1e293b, 1.15);
     hemiLight.position.set(0, 50, 0);
     scene.add(hemiLight);
 
@@ -323,11 +402,12 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     rimLight.position.set(-18, 15, -16);
     scene.add(rimLight);
 
-    // 5. Ground Test Pad & Natural Outdoor Perimeter
+    // 5. Ground Test Pad & All 4 Switchable 3D Location Environments
     const groundTex = createTestPadGridTexture(maxAnisotropy);
     const groundGeo = new THREE.PlaneGeometry(220, 220);
     const groundMat = new THREE.MeshStandardMaterial({
       map: groundTex,
+      color: initialLoc.groundColorHex,
       roughness: 0.82,
       metalness: 0.08,
     });
@@ -337,8 +417,35 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     groundMesh.receiveShadow = true;
     scene.add(groundMesh);
 
-    const outdoorEnv = createOutdoorEnvironment();
-    scene.add(outdoorEnv);
+    const locationGroups = createAllLocationEnvironments();
+    (Object.keys(locationGroups) as LabLocationId[]).forEach((locId) => {
+      locationGroups[locId].visible =
+        locId === (configRef.current.locationId || 'crunchlabs_warehouse');
+      scene.add(locationGroups[locId]);
+    });
+
+    // 5b. Interactive 3D Chemical Supply Cart & Safety Gear Locker Rack
+    const supplyStations = createLabSupplyStations();
+    scene.add(supplyStations.group);
+
+    // 5c. 3D Footstep Target Marker Ring on the Floor (shows where Scientist is walking!)
+    const walkTargetMarker = new THREE.Group();
+    const walkRingGeo = new THREE.RingGeometry(0.28, 0.38, 32);
+    walkRingGeo.rotateX(-Math.PI / 2);
+    const walkRingMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.9,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    const walkRingMesh = new THREE.Mesh(walkRingGeo, walkRingMat);
+    walkRingMesh.position.y = 0.04;
+    walkTargetMarker.add(walkRingMesh);
+    walkTargetMarker.visible = false;
+    scene.add(walkTargetMarker);
 
     // 6. Safety Blast Perimeter Ring on the Ground
     const ringGeo = new THREE.RingGeometry(0.94, 1.0, 64);
@@ -380,7 +487,6 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     const poleMesh = new THREE.Mesh(poleGeo, poleMat);
     arRulerGroup.add(poleMesh);
 
-    // Tick rungs every 2 meters up the 3D AR Laser Pole
     const rungGeo = new THREE.BoxGeometry(0.65, 0.04, 0.04);
     for (let h = 2; h <= 38; h += 2) {
       const rung = new THREE.Mesh(rungGeo, poleMat);
@@ -390,7 +496,6 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     arRulerGroup.position.set(-2.6, 0, 0);
     scene.add(arRulerGroup);
 
-    // Rising 3D AR Peak Target Ring & Laser Bar
     const arPeakMarkerGroup = new THREE.Group();
     const peakRingGeo = new THREE.RingGeometry(1.1, 1.22, 48);
     peakRingGeo.rotateX(-Math.PI / 2);
@@ -425,7 +530,14 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     rigs[configRef.current.scaleId].group.visible = true;
 
     const avatar = createScientistAvatar(isSoftwareGl);
+    const initialZ = Math.max(2.6, Math.min(26, safetyGearRef.current.standBackMeters * 0.72));
+    avatar.group.position.set(0, 0, initialZ);
     avatar.group.rotation.y = Math.PI;
+    sceneRefs.current.avatarWalkState.x = 0;
+    sceneRefs.current.avatarWalkState.z = initialZ;
+    sceneRefs.current.avatarWalkState.targetX = 0;
+    sceneRefs.current.avatarWalkState.targetZ = initialZ;
+
     syncScientistAvatarPpe(avatar, safetyGearRef.current);
     scene.add(avatar.group);
 
@@ -455,7 +567,7 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     hoseSprayMesh.visible = false;
     scene.add(hoseSprayMesh);
 
-    // 10. InstancedMesh for Viscoelastic Foam Billows
+    // 10. InstancedMesh for Viscoelastic Foam Billows + Persistent Accumulated Foam Mound!
     const foamBumpTex = createFoamBumpTexture();
     const foamGeo = new THREE.IcosahedronGeometry(1, 2);
     const foamMat = new THREE.MeshPhysicalMaterial({
@@ -475,6 +587,46 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     foamMesh.receiveShadow = !isSoftwareGl;
     foamMesh.frustumCulled = false;
     scene.add(foamMesh);
+
+    // Persistent 3D Accumulated Foam Mound & Spreading Blanket on the Ground (Collects up and never fades!)
+    const accumulatedMoundGroup = new THREE.Group();
+    const accumulatedMoundMat = new THREE.MeshPhysicalMaterial({
+      color: 0x38bdf8,
+      roughness: 0.38,
+      metalness: 0.02,
+      bumpMap: foamBumpTex,
+      bumpScale: 0.08,
+      clearcoat: 0.45,
+      clearcoatRoughness: 0.25,
+      sheen: 0.6,
+      sheenRoughness: 0.4,
+    });
+
+    // Build a multi-lobe organic foam mountain + spreading blanket that scales up as foam lands
+    for (let m = 0; m < MOUND_LOBE_COUNT; m++) {
+      const ringIdx = Math.floor(m / 9); // 4 concentric rings (0..3)
+      const angle = ((m % 9) / 9) * Math.PI * 2 + ringIdx * 0.35;
+      const dist = ringIdx === 0 ? 0.35 : ringIdx * 1.15;
+      const lobeRadius =
+        ringIdx === 0 ? 1.15 : ringIdx === 1 ? 0.95 : ringIdx === 2 ? 0.78 : 0.62;
+      const lobeMesh = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(lobeRadius, 2),
+        accumulatedMoundMat
+      );
+      const ySquash = ringIdx === 0 ? 0.85 : ringIdx === 1 ? 0.62 : 0.42;
+      lobeMesh.position.set(
+        Math.cos(angle) * dist,
+        lobeRadius * ySquash * 0.45,
+        Math.sin(angle) * dist
+      );
+      lobeMesh.scale.set(1.25, ySquash, 1.25);
+      lobeMesh.castShadow = !isSoftwareGl;
+      lobeMesh.receiveShadow = !isSoftwareGl;
+      accumulatedMoundGroup.add(lobeMesh);
+    }
+    accumulatedMoundGroup.scale.setScalar(0.001);
+    accumulatedMoundGroup.visible = false;
+    scene.add(accumulatedMoundGroup);
 
     // 11. InstancedMesh for Exothermic Steam / Oxygen Vapor Clouds
     const steamGeo = new THREE.DodecahedronGeometry(1, 1);
@@ -516,6 +668,9 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
       settled: false,
       colorVariation: 1,
     }));
+
+    // Radial height rings so falling foam blobs stack ON TOP of already-collected foam on the ground!
+    const foamStackRings = new Float32Array(24);
 
     const steamParticles: SteamParticle[] = Array.from({ length: STEAM_INSTANCE_COUNT }, () => ({
       active: false,
@@ -560,14 +715,21 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     steamMesh.instanceMatrix.needsUpdate = true;
     orbeezMesh.instanceMatrix.needsUpdate = true;
 
+    sceneRefs.current.scene = scene;
+    sceneRefs.current.groundMat = groundMat;
     sceneRefs.current.rigs = rigs;
+    sceneRefs.current.locationGroups = locationGroups;
+    sceneRefs.current.supplyStations = supplyStations;
     sceneRefs.current.avatar = avatar;
+    sceneRefs.current.walkTargetMarker = walkTargetMarker;
     sceneRefs.current.safetyRingMesh = safetyRingMesh;
     sceneRefs.current.safetyZoneDisc = safetyZoneDisc;
     sceneRefs.current.arRulerGroup = arRulerGroup;
     sceneRefs.current.arPeakMarkerGroup = arPeakMarkerGroup;
     sceneRefs.current.foamMesh = foamMesh;
     sceneRefs.current.foamMat = foamMat;
+    sceneRefs.current.accumulatedMoundGroup = accumulatedMoundGroup;
+    sceneRefs.current.accumulatedMoundMat = accumulatedMoundMat;
     sceneRefs.current.steamMesh = steamMesh;
     sceneRefs.current.orbeezMesh = orbeezMesh;
     sceneRefs.current.pourStreamMesh = pourStreamMesh;
@@ -591,6 +753,112 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     controls.target.copy(_targetLookAt);
     controls.update();
 
+    // Pointer Click Raycasting on Canvas: Click 3D Supply Cart / Safety Locker to Fetch, OR Click Floor to Walk!
+    let pointerDownPos = { x: 0, y: 0, time: 0 };
+    const onCanvasPointerDown = (e: PointerEvent) => {
+      pointerDownPos = { x: e.clientX, y: e.clientY, time: performance.now() };
+    };
+
+    const onCanvasPointerUp = (e: PointerEvent) => {
+      const moveDist = Math.hypot(e.clientX - pointerDownPos.x, e.clientY - pointerDownPos.y);
+      const elapsed = performance.now() - pointerDownPos.time;
+      // Only treat as a walk/fetch click if the user didn't drag the OrbitControls camera
+      if (moveDist > 9 || elapsed > 550) return;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      _pointerNdc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      _pointerNdc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      _raycaster.setFromCamera(_pointerNdc, camera);
+
+      const avWalk = sceneRefs.current.avatarWalkState;
+
+      // 1. Check if user clicked a 3D Bottle on the Supply Cart or the 3D Safety Gear Locker!
+      const stationHits = _raycaster.intersectObjects(supplyStations.clickableTargets, false);
+      if (stationHits.length > 0) {
+        const hitData = stationHits[0].object.userData;
+        if (hitData.interactType === 'fetch_ingredient' && hitData.step) {
+          avWalk.errand = {
+            type: 'fetch_ingredient',
+            phase: 'to_station',
+            targetX: supplyStations.chemTablePos.x + 0.5,
+            targetZ: supplyStations.chemTablePos.z + 0.9,
+            returnX: avWalk.x,
+            returnZ: avWalk.z,
+            step: hitData.step as IngredientStep,
+          };
+          avWalk.targetX = avWalk.errand.targetX;
+          avWalk.targetZ = avWalk.errand.targetZ;
+          walkTargetMarker.position.set(avWalk.targetX, 0, avWalk.targetZ);
+          walkTargetMarker.visible = true;
+          return;
+        }
+        if (hitData.interactType === 'fetch_safety') {
+          avWalk.errand = {
+            type: 'fetch_safety',
+            phase: 'to_station',
+            targetX: supplyStations.safetyRackPos.x - 0.5,
+            targetZ: supplyStations.safetyRackPos.z + 0.9,
+            returnX: avWalk.x,
+            returnZ: avWalk.z,
+          };
+          avWalk.targetX = avWalk.errand.targetX;
+          avWalk.targetZ = avWalk.errand.targetZ;
+          walkTargetMarker.position.set(avWalk.targetX, 0, avWalk.targetZ);
+          walkTargetMarker.visible = true;
+          return;
+        }
+      }
+
+      // 2. Otherwise check if user clicked on the Lab Floor to walk their Scientist there!
+      const groundHits = _raycaster.intersectObject(groundMesh, false);
+      if (groundHits.length > 0) {
+        const pt = groundHits[0].point;
+        // Keep outside the central vessel core so the scientist stands around the vessel, not inside it
+        const distFromCenter = Math.hypot(pt.x, pt.z);
+        const minVesselClearance =
+          configRef.current.scaleId === 'lab_beaker'
+            ? 1.75
+            : configRef.current.scaleId === 'kiddie_pool'
+            ? 2.8
+            : configRef.current.scaleId === 'steel_flask'
+            ? 3.8
+            : 5.2;
+
+        let destX = THREE.MathUtils.clamp(pt.x, -22, 22);
+        let destZ = THREE.MathUtils.clamp(pt.z, -18, 24);
+        if (distFromCenter < minVesselClearance) {
+          const pushAngle = Math.atan2(destZ || 1, destX || 0.1);
+          destX = Math.cos(pushAngle) * minVesselClearance;
+          destZ = Math.sin(pushAngle) * minVesselClearance;
+        }
+
+        avWalk.errand = null;
+        avatar.carriedBottleGroup.visible = false;
+        avWalk.targetX = destX;
+        avWalk.targetZ = destZ;
+        walkTargetMarker.position.set(destX, 0, destZ);
+        walkTargetMarker.visible = true;
+      }
+    };
+
+    renderer.domElement.addEventListener('pointerdown', onCanvasPointerDown);
+    renderer.domElement.addEventListener('pointerup', onCanvasPointerUp);
+
+    // Keyboard WASD / Arrow Keys for walking the Scientist around directly!
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const k = e.key.toLowerCase();
+      if (['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
+        sceneRefs.current.avatarWalkState.keysPressed.add(k);
+        sceneRefs.current.avatarWalkState.errand = null;
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      sceneRefs.current.avatarWalkState.keysPressed.delete(e.key.toLowerCase());
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+
     // Helper to project a 3D world point (x, y, z) to 2D screen pixels and position a DOM element
     const positionArElement = (
       el: HTMLElement | null,
@@ -608,7 +876,6 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
       _projVec.set(wx, wy, wz);
       _projVec.project(camera);
 
-      // Hide if behind the camera frustum or clipped off-screen
       if (
         _projVec.z > 1.0 ||
         _projVec.x < -0.96 ||
@@ -631,6 +898,28 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     let spawnCursorFoam = 0;
     let spawnCursorSteam = 0;
     let spawnCursorOrbeez = 0;
+
+    // Helper to find the next available foam particle slot without erasing settled ground foam!
+    const acquireFoamSlot = (): FoamParticle => {
+      for (let attempt = 0; attempt < FOAM_INSTANCE_COUNT; attempt++) {
+        const idx = (spawnCursorFoam + attempt) % FOAM_INSTANCE_COUNT;
+        if (!foamParticles[idx].active) {
+          spawnCursorFoam = (idx + 1) % FOAM_INSTANCE_COUNT;
+          return foamParticles[idx];
+        }
+      }
+      // If all 1,280 slots are active, prefer an airborne one so settled ground foam stays intact
+      for (let attempt = 0; attempt < FOAM_INSTANCE_COUNT; attempt++) {
+        const idx = (spawnCursorFoam + attempt) % FOAM_INSTANCE_COUNT;
+        if (!foamParticles[idx].settled) {
+          spawnCursorFoam = (idx + 1) % FOAM_INSTANCE_COUNT;
+          return foamParticles[idx];
+        }
+      }
+      const fallback = foamParticles[spawnCursorFoam];
+      spawnCursorFoam = (spawnCursorFoam + 1) % FOAM_INSTANCE_COUNT;
+      return fallback;
+    };
 
     function afterDraw(cb: () => void) {
       const gl = renderer.getContext() as WebGL2RenderingContext;
@@ -656,6 +945,7 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
       const currentResult = activeResultRef.current;
       const predResult = predictedResultRef.current;
       const rState = sceneRefs.current.reactionState;
+      const avWalk = sceneRefs.current.avatarWalkState;
       const activeRig = rigs[currentConfig.scaleId];
 
       // Smooth exponential camera transition
@@ -672,7 +962,7 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
       }
       controls.update();
 
-      // Update Scientist Avatar position & Safety Blast Ring
+      // Update Safety Blast Ring
       const safetyEval = evaluateSafetyHazards(currentConfig, currentGear);
       const visualRingRadius = Math.max(2.6, Math.min(26, safetyEval.minSafeDistanceMeters * 0.72));
       safetyRingMesh.scale.setScalar(visualRingRadius);
@@ -684,8 +974,157 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
         ? 0.03
         : 0.11;
 
-      const avatarZ = Math.max(2.8, Math.min(28, currentGear.standBackMeters * 0.72));
-      avatar.group.position.z = THREE.MathUtils.damp(avatar.group.position.z, avatarZ, 6, dt);
+      // --- SCIENTIST WALKING, KEYBOARD CONTROL, & FETCH ERRAND STATE MACHINE ---
+      const walkSpeed = 5.4;
+      if (avWalk.keysPressed.size > 0) {
+        let kx = 0;
+        let kz = 0;
+        if (avWalk.keysPressed.has('w') || avWalk.keysPressed.has('arrowup')) kz -= 1;
+        if (avWalk.keysPressed.has('s') || avWalk.keysPressed.has('arrowdown')) kz += 1;
+        if (avWalk.keysPressed.has('a') || avWalk.keysPressed.has('arrowleft')) kx -= 1;
+        if (avWalk.keysPressed.has('d') || avWalk.keysPressed.has('arrowright')) kx += 1;
+        if (kx !== 0 || kz !== 0) {
+          const len = Math.hypot(kx, kz);
+          avWalk.targetX = THREE.MathUtils.clamp(avWalk.x + (kx / len) * walkSpeed * dt * 2.5, -22, 22);
+          avWalk.targetZ = THREE.MathUtils.clamp(avWalk.z + (kz / len) * walkSpeed * dt * 2.5, -18, 24);
+          walkTargetMarker.visible = false;
+        }
+      }
+
+      const dx = avWalk.targetX - avWalk.x;
+      const dz = avWalk.targetZ - avWalk.z;
+      const distToTarget = Math.hypot(dx, dz);
+
+      if (distToTarget > 0.09) {
+        avWalk.isWalking = true;
+        const stepDist = Math.min(distToTarget, walkSpeed * dt);
+        avWalk.x += (dx / distToTarget) * stepDist;
+        avWalk.z += (dz / distToTarget) * stepDist;
+        avWalk.walkPhase += dt * 13.5;
+
+        // Smoothly rotate Scientist to face walking direction
+        const targetHeading = Math.atan2(dx, dz);
+        avatar.group.rotation.y = THREE.MathUtils.damp(
+          avatar.group.rotation.y,
+          targetHeading,
+          10,
+          dt
+        );
+
+        // Articulated limb swing & walking bounce!
+        const swing = Math.sin(avWalk.walkPhase);
+        avatar.leftLegGroup.rotation.x = swing * 0.65;
+        avatar.rightLegGroup.rotation.x = -swing * 0.65;
+        const carrying = avatar.carriedBottleGroup.visible;
+        avatar.leftArmGroup.rotation.x = carrying ? -0.55 : -swing * 0.45;
+        avatar.rightArmGroup.rotation.x = carrying ? -0.55 : swing * 0.45;
+        avatar.bodyGroup.position.y = Math.abs(Math.sin(avWalk.walkPhase)) * 0.075;
+      } else {
+        avWalk.isWalking = false;
+        avatar.leftLegGroup.rotation.x = THREE.MathUtils.damp(
+          avatar.leftLegGroup.rotation.x,
+          0,
+          10,
+          dt
+        );
+        avatar.rightLegGroup.rotation.x = THREE.MathUtils.damp(
+          avatar.rightLegGroup.rotation.x,
+          0,
+          10,
+          dt
+        );
+        const carrying = avatar.carriedBottleGroup.visible;
+        avatar.leftArmGroup.rotation.x = THREE.MathUtils.damp(
+          avatar.leftArmGroup.rotation.x,
+          carrying ? -0.55 : 0,
+          10,
+          dt
+        );
+        avatar.rightArmGroup.rotation.x = THREE.MathUtils.damp(
+          avatar.rightArmGroup.rotation.x,
+          carrying ? -0.55 : 0,
+          10,
+          dt
+        );
+        avatar.bodyGroup.position.y = THREE.MathUtils.damp(avatar.bodyGroup.position.y, 0, 10, dt);
+
+        // Advance Errand Phase if Scientist arrived at a station or vessel!
+        if (avWalk.errand) {
+          const err = avWalk.errand;
+          if (err.type === 'fetch_ingredient' && err.step) {
+            if (err.phase === 'to_station') {
+              // Pick up the 3D bottle from the Chemical Supply Cart and walk to the Reaction Vessel!
+              avatar.carriedBottleMat.color.set(INGREDIENT_META[err.step].color);
+              avatar.carriedBottleGroup.visible = true;
+              avatar.remoteBoxGroup.visible = false;
+              const vesselStopDist =
+                currentConfig.scaleId === 'lab_beaker'
+                  ? 1.9
+                  : currentConfig.scaleId === 'kiddie_pool'
+                  ? 2.9
+                  : 3.9;
+              err.phase = 'to_vessel';
+              avWalk.targetX = -0.8;
+              avWalk.targetZ = vesselStopDist;
+              walkTargetMarker.position.set(avWalk.targetX, 0, avWalk.targetZ);
+            } else if (err.phase === 'to_vessel') {
+              // Pour the carried ingredient into the vessel!
+              if (onFetchedIngredientRef.current) {
+                onFetchedIngredientRef.current(err.step);
+              }
+              rState.pourTimer = 0.85;
+              rState.pourColorHex = INGREDIENT_META[err.step].color;
+              avatar.carriedBottleGroup.visible = false;
+              avatar.remoteBoxGroup.visible = currentGear.remoteTriggerArmed;
+              err.phase = 'returning';
+              avWalk.targetX = err.returnX;
+              avWalk.targetZ = err.returnZ;
+              walkTargetMarker.position.set(avWalk.targetX, 0, avWalk.targetZ);
+            } else {
+              avWalk.errand = null;
+              walkTargetMarker.visible = false;
+            }
+          } else if (err.type === 'fetch_safety') {
+            if (err.phase === 'to_station') {
+              if (onFetchedSafetyRef.current) {
+                onFetchedSafetyRef.current();
+              }
+              err.phase = 'returning';
+              avWalk.targetX = err.returnX;
+              avWalk.targetZ = err.returnZ;
+              walkTargetMarker.position.set(avWalk.targetX, 0, avWalk.targetZ);
+            } else {
+              avWalk.errand = null;
+              walkTargetMarker.visible = false;
+            }
+          }
+        } else {
+          walkTargetMarker.visible = false;
+          // Face the reaction vessel at (0, 0) when standing still
+          const lookToVesselAngle = Math.atan2(-avWalk.x, -avWalk.z);
+          avatar.group.rotation.y = THREE.MathUtils.damp(
+            avatar.group.rotation.y,
+            lookToVesselAngle,
+            8,
+            dt
+          );
+        }
+
+        // Report updated standoff distance in meters back to App state when scientist settles
+        const realWorldMeters = Math.max(
+          1,
+          Math.round(Math.hypot(avWalk.x, avWalk.z) / 0.72)
+        );
+        if (
+          realWorldMeters !== currentGear.standBackMeters &&
+          !avWalk.errand &&
+          onUpdateStandBackRef.current
+        ) {
+          onUpdateStandBackRef.current(realWorldMeters, true);
+        }
+      }
+
+      avatar.group.position.set(avWalk.x, 0, avWalk.z);
 
       // Update Pouring Stream Animation
       if (rState.pourTimer > 0) {
@@ -714,7 +1153,6 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
       if (rState.isRunning && currentResult) {
         rState.elapsed += dt;
 
-        // Ramp live height & temperature smoothly toward peak during the reaction
         const rampProgress = Math.min(1, rState.elapsed / 1.85);
         const easedProgress = 1 - Math.pow(1 - rampProgress, 3);
         rState.currentLiveHeightMeters = Number(
@@ -725,7 +1163,6 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
             (currentResult.peakTempCelsius - currentConfig.chemicalTempCelsius) * easedProgress
         );
 
-        // Auto-capture a peak eruption photo at t = 2.1s
         if (!rState.autoPhotoTakenForRun && rState.elapsed >= 2.1 && onAutoPhotoRef.current) {
           rState.autoPhotoTakenForRun = true;
           renderer.render(scene, camera);
@@ -742,17 +1179,30 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
           const nozzleR = activeRig.metrics.nozzleRadius;
 
           if (currentResult.foamTrapEfficiency > 0.05) {
+            // Tuned spawn count so 1,280 foam billows never overwrite settled ground foam!
             const spawnCount =
               currentResult.outcomeMode === 'catalyst_first_fizz_boiloff' ||
               currentResult.outcomeMode === 'steam_flash_vaporization'
-                ? 2
+                ? 1
                 : currentResult.outcomeMode === 'devils_toothpaste_detonation'
-                ? 14
-                : 9;
+                ? 4
+                : 3;
+
+            const moundGrowthRate =
+              currentConfig.scaleId === 'lab_beaker'
+                ? 0.24
+                : currentConfig.scaleId === 'kiddie_pool'
+                ? 0.65
+                : currentConfig.scaleId === 'steel_flask'
+                ? 1.05
+                : 1.55;
+            rState.targetMoundScale = Math.min(
+              currentConfig.scaleId === 'lab_beaker' ? 1.45 : 4.2,
+              rState.targetMoundScale + dt * moundGrowthRate * currentResult.foamTrapEfficiency
+            );
 
             for (let s = 0; s < spawnCount; s++) {
-              const p = foamParticles[spawnCursorFoam];
-              spawnCursorFoam = (spawnCursorFoam + 1) % FOAM_INSTANCE_COUNT;
+              const p = acquireFoamSlot();
 
               const angle = Math.random() * Math.PI * 2;
               const radialOffset = Math.random() * nozzleR * 0.65;
@@ -766,10 +1216,10 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
               const jetSpeed = Math.min(28, Math.max(2.2, currentResult.eruptionVelocityMps * 0.58));
               const spread =
                 currentConfig.scaleId === 'steel_flask'
-                  ? 1.1
+                  ? 1.3
                   : currentConfig.scaleId === 'outdoor_crater'
-                  ? 4.2
-                  : 2.1;
+                  ? 4.5
+                  : 2.2;
 
               p.vx = Math.cos(angle) * (0.4 + Math.random() * spread);
               p.vy = jetSpeed * (0.78 + Math.random() * 0.38);
@@ -777,15 +1227,15 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
 
               const baseBlobSize =
                 currentConfig.scaleId === 'lab_beaker'
-                  ? 0.22
+                  ? 0.25
                   : currentConfig.scaleId === 'kiddie_pool'
-                  ? 0.58
+                  ? 0.64
                   : currentConfig.scaleId === 'steel_flask'
-                  ? 0.72
-                  : 1.05;
+                  ? 0.82
+                  : 1.15;
 
               p.radius = baseBlobSize * 0.35;
-              p.targetRadius = baseBlobSize * (0.8 + Math.random() * 0.65);
+              p.targetRadius = baseBlobSize * (0.85 + Math.random() * 0.7);
               p.colorVariation = Math.random();
             }
           }
@@ -842,25 +1292,33 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
           }
         }
       } else {
-        // When idle, show predicted target height & current vessel temperature
         rState.currentLiveHeightMeters = predResult.peakHeightMeters;
         rState.currentLiveTempCelsius = currentConfig.chemicalTempCelsius;
       }
 
-      // Water Hose Cleanup Dissolution
+      // Water Hose Cleanup Dissolution (ONLY washes away collected foam when Hose Down is triggered!)
       if (rState.isCleaningUp) {
         rState.cleanupElapsed += dt;
         hoseSprayMesh.visible = true;
-        hoseSprayMesh.position.set(0, 1.3, avatar.group.position.z - 2.8);
+        hoseSprayMesh.position.set(
+          avatar.group.position.x,
+          1.3,
+          avatar.group.position.z - 2.4
+        );
         hoseSprayMesh.rotation.y = Math.sin(rState.cleanupElapsed * 5) * 0.45;
+
+        rState.targetMoundScale = 0;
+        rState.currentMoundScale *= Math.pow(0.12, dt);
+        foamStackRings.fill(0);
 
         for (let i = 0; i < FOAM_INSTANCE_COUNT; i++) {
           const p = foamParticles[i];
           if (p.active) {
-            p.targetRadius *= Math.pow(0.18, dt);
-            p.radius *= Math.pow(0.18, dt);
+            p.targetRadius *= Math.pow(0.15, dt);
+            p.radius *= Math.pow(0.15, dt);
             if (p.radius < 0.03) {
               p.active = false;
+              p.settled = false;
               p.y = -50;
             }
             foamNeedsUpdate = true;
@@ -869,13 +1327,35 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
 
         if (rState.cleanupElapsed > 1.6) {
           rState.isCleaningUp = false;
+          rState.currentMoundScale = 0;
+          accumulatedMoundGroup.visible = false;
           hoseSprayMesh.visible = false;
         }
       } else {
         hoseSprayMesh.visible = false;
       }
 
-      // Advance Active Foam Particles
+      // Smoothly grow the Persistent 3D Accumulated Foam Mound on the table/ground!
+      if (rState.targetMoundScale > 0.01 || rState.currentMoundScale > 0.01) {
+        rState.currentMoundScale = THREE.MathUtils.damp(
+          rState.currentMoundScale,
+          rState.targetMoundScale,
+          2.2,
+          dt
+        );
+        accumulatedMoundGroup.visible = rState.currentMoundScale > 0.02;
+        const moundBaseY = currentConfig.scaleId === 'lab_beaker' ? 1.54 : 0.02;
+        accumulatedMoundGroup.position.set(0, moundBaseY, 0);
+        accumulatedMoundGroup.scale.set(
+          rState.currentMoundScale * 1.35,
+          rState.currentMoundScale * 0.85,
+          rState.currentMoundScale * 1.35
+        );
+        accumulatedMoundMat.color.set(dyeSpec.hex);
+        accumulatedMoundMat.sheenColor.set(dyeSpec.accentHex);
+      }
+
+      // Advance Active Foam Particles (They collect up in a mound on the ground and NEVER fade away!)
       for (let i = 0; i < FOAM_INSTANCE_COUNT; i++) {
         const p = foamParticles[i];
         if (!p.active) continue;
@@ -889,25 +1369,45 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
           p.y += p.vy * dt;
           p.z += p.vz * dt;
 
-          const floorY =
-            currentConfig.scaleId === 'lab_beaker' && Math.hypot(p.x, p.z) < 1.55
-              ? 1.55 + p.radius * 0.55
-              : p.radius * 0.55;
+          const radialDist = Math.hypot(p.x, p.z);
+          const ringBin = Math.min(23, Math.floor(radialDist * 1.4));
+          const stackedHeight = foamStackRings[ringBin];
 
-          if (p.y <= floorY) {
-            p.y = floorY;
+          const baseFloorY =
+            currentConfig.scaleId === 'lab_beaker' && radialDist < 1.65
+              ? 1.55 + p.radius * 0.52
+              : p.radius * 0.52;
+
+          const landingY = baseFloorY + stackedHeight;
+
+          if (p.y <= landingY) {
+            p.y = landingY;
             p.vy = 0;
-            p.vx *= 0.45;
-            p.vz *= 0.45;
-            if (Math.hypot(p.vx, p.vz) < 0.25 || p.age > 3.2) {
+            // Foam creeps outward radially as it piles up!
+            const creepOut = 0.55;
+            p.vx *= creepOut;
+            p.vz *= creepOut;
+            if (Math.hypot(p.vx, p.vz) < 0.28 || p.age > 3.0) {
               p.settled = true;
+              // Increment the radial foam pile height so subsequent foam stacks higher on top!
+              const maxPileH =
+                currentConfig.scaleId === 'lab_beaker'
+                  ? 1.35
+                  : currentConfig.scaleId === 'kiddie_pool'
+                  ? 2.6
+                  : 4.5;
+              foamStackRings[ringBin] = Math.min(
+                maxPileH,
+                foamStackRings[ringBin] + p.targetRadius * 0.11
+              );
             }
           }
         }
 
         _dummy.position.set(p.x, p.y, p.z);
-        const squash = p.settled ? 0.72 : 1.0;
-        _dummy.scale.set(p.radius, p.radius * squash, p.radius);
+        const squash = p.settled ? 0.78 : 1.0;
+        const spreadFactor = p.settled ? 1.18 : 1.0;
+        _dummy.scale.set(p.radius * spreadFactor, p.radius * squash, p.radius * spreadFactor);
         _dummy.updateMatrix();
         foamMesh.setMatrixAt(i, _dummy.matrix);
 
@@ -1002,7 +1502,6 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
       arPeakMarkerGroup.visible = showArRef.current && isEruptionPhase;
       arRulerGroup.position.x = THREE.MathUtils.damp(arRulerGroup.position.x, poleX, 6, dt);
 
-      // Map real-world meters to 3D visual Y coordinate above the nozzle
       const visualScaleY =
         currentConfig.scaleId === 'lab_beaker'
           ? 0.9
@@ -1020,11 +1519,10 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
         dt
       );
 
-      // Update 2D AR Projected DOM Callout Positions (Staged by Task Phase!)
+      // Update 2D AR Projected DOM Callout Positions
       const vw = container?.clientWidth || window.innerWidth;
       const vh = container?.clientHeight || window.innerHeight;
 
-      // 1. AR Plume Apex Callout — ONLY shown during/after eruption (Staged Revelation)
       if (!isEruptionPhase) {
         if (arApexBadgeRef.current) arApexBadgeRef.current.style.opacity = '0';
       } else {
@@ -1037,7 +1535,6 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
         }
       }
 
-      // 2. AR Vessel Sensor — Shows Live Measured Contents during Mixing, Core Temp & Speed during Eruption
       const vesselY = activeRig.metrics.nozzleY * 0.55;
       const vesselOffsetX = Math.abs(poleX) * 0.68;
       positionArElement(arVesselBadgeRef.current, vesselOffsetX, vesselY, 0, vw, vh);
@@ -1065,31 +1562,67 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
         } else {
           const activeSim = currentResult || predResult;
           arVesselTempRef.current.textContent = `CORE TEMP: ${rState.currentLiveTempCelsius} °C`;
-          arVesselStatsRef.current.textContent = `FOAM VOL: ${activeSim.foamVolumeCubicMeters} m³ · SPEED: ${activeSim.eruptionVelocityMps} m/s`;
+          arVesselStatsRef.current.textContent = `FOAM COLLECTED: ${activeSim.foamVolumeCubicMeters} m³ · SPEED: ${activeSim.eruptionVelocityMps} m/s`;
         }
       }
 
-      // 3. AR Scientist Safety & Standoff Callout
+      // 3. AR Scientist Safety & Walking Status Callout
       positionArElement(
         arAvatarBadgeRef.current,
-        0,
+        avatar.group.position.x,
         2.15,
         avatar.group.position.z,
         vw,
         vh
       );
       if (arAvatarTextRef.current) {
-        if (!currentGear.goggles) {
-          arAvatarTextRef.current.textContent = `NO GOGGLES ON! ⚠️ (Soap-in-Eye Risk!)`;
+        const distM = Math.max(
+          1,
+          Math.round(Math.hypot(avatar.group.position.x, avatar.group.position.z) / 0.72)
+        );
+        if (avWalk.errand) {
+          arAvatarTextRef.current.textContent =
+            avWalk.errand.type === 'fetch_ingredient'
+              ? `🚶 Walking to Fetch ${
+                  INGREDIENT_META[avWalk.errand.step || 'peroxide'].shortLabel
+                }...`
+              : `🚶 Walking to Safety Locker...`;
+        } else if (avWalk.isWalking) {
+          arAvatarTextRef.current.textContent = `🚶 Walking (${distM}m from vessel)...`;
+        } else if (!currentGear.goggles) {
+          arAvatarTextRef.current.textContent = `NO GOGGLES! ⚠️ · ${distM}m (Click Floor/WASD to Walk)`;
         } else {
-          const isSafeDist = currentGear.standBackMeters >= safetyEval.minSafeDistanceMeters;
-          arAvatarTextRef.current.textContent = `GOGGLES ON ✓ · ${currentGear.standBackMeters}m ${
-            isSafeDist ? '(SAFE ✓)' : `(NEED ${safetyEval.minSafeDistanceMeters}m ⚠️)`
+          const isSafeDist = distM >= safetyEval.minSafeDistanceMeters;
+          arAvatarTextRef.current.textContent = `GOGGLES ON ✓ · ${distM}m ${
+            isSafeDist ? '(SAFE ✓)' : `(WALK BACK ≥${safetyEval.minSafeDistanceMeters}m ⚠️)`
           }`;
         }
       }
 
-      // 4. AR Vertical Scale Ruler Benchmarks — Staged in ONLY during/after Eruption!
+      // 3b. AR Supply Cart & Safety Locker Callouts (Shown when mixing)
+      if (isEruptionPhase) {
+        if (arChemCartBadgeRef.current) arChemCartBadgeRef.current.style.opacity = '0';
+        if (arSafetyRackBadgeRef.current) arSafetyRackBadgeRef.current.style.opacity = '0';
+      } else {
+        positionArElement(
+          arChemCartBadgeRef.current,
+          supplyStations.chemTablePos.x,
+          1.75,
+          supplyStations.chemTablePos.z,
+          vw,
+          vh
+        );
+        positionArElement(
+          arSafetyRackBadgeRef.current,
+          supplyStations.safetyRackPos.x,
+          2.1,
+          supplyStations.safetyRackPos.z,
+          vw,
+          vh
+        );
+      }
+
+      // 4. AR Vertical Scale Ruler Benchmarks
       AR_BENCHMARKS.forEach((bm, idx) => {
         const el = arBenchmarkRefs.current[idx];
         if (!isEruptionPhase) {
@@ -1133,12 +1666,32 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
 
     return () => {
       window.removeEventListener('resize', handleResize);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      renderer.domElement.removeEventListener('pointerdown', onCanvasPointerDown);
+      renderer.domElement.removeEventListener('pointerup', onCanvasPointerUp);
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
       controls.dispose();
       renderer.dispose();
     };
   }, []);
+
+  // Synchronize 3D Lab Location / Environment Setting
+  useEffect(() => {
+    const s = sceneRefs.current;
+    if (!s.locationGroups || !s.scene || !s.groundMat) return;
+    const locId: LabLocationId = config.locationId || 'crunchlabs_warehouse';
+    const locSpec = LAB_LOCATIONS[locId];
+
+    (Object.keys(s.locationGroups) as LabLocationId[]).forEach((id) => {
+      s.locationGroups![id].visible = id === locId;
+    });
+
+    s.scene.background = new THREE.Color(locSpec.skyHex);
+    s.scene.fog = new THREE.FogExp2(locSpec.fogHex, locSpec.fogDensity);
+    s.groundMat.color.setHex(locSpec.groundColorHex);
+  }, [config.locationId]);
 
   // Synchronize Scale Rig Visibility & Camera Target
   useEffect(() => {
@@ -1159,6 +1712,20 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     activeRig.metrics.liquidMesh.visible = config.additionOrder.length > 0;
     (activeRig.metrics.liquidMesh.material as THREE.MeshStandardMaterial).color.set(dyeSpec.hex);
     activeRig.metrics.liquidMesh.scale.y = Math.max(0.12, stepFillRatio);
+
+    // Ensure Scientist isn't standing inside the new vessel if the vessel got wider
+    const minClearance =
+      config.scaleId === 'lab_beaker'
+        ? 2.2
+        : config.scaleId === 'kiddie_pool'
+        ? 3.4
+        : config.scaleId === 'steel_flask'
+        ? 4.4
+        : 5.8;
+    const curDist = Math.hypot(s.avatarWalkState.x, s.avatarWalkState.z);
+    if (curDist < minClearance) {
+      s.avatarWalkState.targetZ = Math.max(minClearance, safetyGear.standBackMeters * 0.72);
+    }
 
     computeCameraTargets(config.scaleId, cameraPreset, safetyGear.standBackMeters);
     s.desiredCamPos.copy(_targetCamPos);
@@ -1198,31 +1765,60 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
       s.desiredLookAt.copy(_targetLookAt);
       s.cameraTransitionActive = true;
     }
-  }, [
-    safetyGear,
-    cameraPreset,
-    config.scaleId,
-    config.dyeColor,
-    config.additionOrder,
-    activeResult,
-  ]);
+  }, [safetyGear, cameraPreset, config.scaleId, config.dyeColor, config.additionOrder, activeResult]);
 
-  // Trigger Pouring Stream Visual
+  // Trigger Scientist Walk-and-Fetch Errand when requested from UI
+  useEffect(() => {
+    if (!fetchErrandTrigger || fetchErrandTrigger.count === 0) return;
+    const s = sceneRefs.current;
+    if (!s.supplyStations || !s.walkTargetMarker) return;
+    const avWalk = s.avatarWalkState;
+
+    if (fetchErrandTrigger.type === 'ingredient' && fetchErrandTrigger.step) {
+      avWalk.errand = {
+        type: 'fetch_ingredient',
+        phase: 'to_station',
+        targetX: s.supplyStations.chemTablePos.x + 0.5,
+        targetZ: s.supplyStations.chemTablePos.z + 0.9,
+        returnX: avWalk.x,
+        returnZ: avWalk.z,
+        step: fetchErrandTrigger.step,
+      };
+      avWalk.targetX = avWalk.errand.targetX;
+      avWalk.targetZ = avWalk.errand.targetZ;
+      s.walkTargetMarker.position.set(avWalk.targetX, 0, avWalk.targetZ);
+      s.walkTargetMarker.visible = true;
+    } else if (fetchErrandTrigger.type === 'safety') {
+      avWalk.errand = {
+        type: 'fetch_safety',
+        phase: 'to_station',
+        targetX: s.supplyStations.safetyRackPos.x - 0.5,
+        targetZ: s.supplyStations.safetyRackPos.z + 0.9,
+        returnX: avWalk.x,
+        returnZ: avWalk.z,
+      };
+      avWalk.targetX = avWalk.errand.targetX;
+      avWalk.targetZ = avWalk.errand.targetZ;
+      s.walkTargetMarker.position.set(avWalk.targetX, 0, avWalk.targetZ);
+      s.walkTargetMarker.visible = true;
+    }
+  }, [fetchErrandTrigger]);
+
+  // Trigger Pouring Stream Visual when an ingredient is poured
   useEffect(() => {
     if (pourStepTrigger.count === 0) return;
     const s = sceneRefs.current;
-    s.reactionState.pourTimer = 0.55;
-    s.reactionState.pourColorHex =
-      pourStepTrigger.step === 'peroxide'
-        ? '#38bdf8'
-        : pourStepTrigger.step === 'soap'
-        ? '#34d399'
-        : pourStepTrigger.step === 'orbeez'
-        ? '#c084fc'
-        : '#f59e0b';
+    const colorMap: Record<string, string> = {
+      peroxide: '#38bdf8',
+      soap: '#34d399',
+      orbeez: '#c084fc',
+      catalyst: '#f59e0b',
+    };
+    s.reactionState.pourColorHex = colorMap[pourStepTrigger.step] || '#38bdf8';
+    s.reactionState.pourTimer = 0.65;
   }, [pourStepTrigger]);
 
-  // Trigger Eruption Simulation
+  // Trigger Reaction Eruption
   useEffect(() => {
     if (eruptionTriggerCount === 0) return;
     const s = sceneRefs.current;
@@ -1232,7 +1828,7 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
     s.reactionState.autoPhotoTakenForRun = false;
   }, [eruptionTriggerCount]);
 
-  // Trigger Hose Cleanup
+  // Trigger Water Hose Cleanup (Washes away all collected ground foam!)
   useEffect(() => {
     if (cleanupTriggerCount === 0) return;
     const s = sceneRefs.current;
@@ -1243,10 +1839,10 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
 
   return (
     <>
-      {/* Isolated WebGL Canvas Mount Container */}
+      {/* Dedicated Isolated WebGL Canvas Mount Container */}
       <div
         ref={canvasMountRef}
-        className="fixed inset-0 w-screen h-screen overflow-hidden z-0"
+        className="fixed inset-0 w-screen h-screen overflow-hidden z-0 cursor-pointer"
         aria-label="Interactive 3D Elephant's Toothpaste Science World Viewport"
       />
 
@@ -1304,7 +1900,7 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
           </div>
         </div>
 
-        {/* 3. AR Scientist Standoff Distance Tape Measure */}
+        {/* 3. AR Scientist Standoff Distance & Walk Status */}
         <div
           ref={arAvatarBadgeRef}
           className="absolute top-0 left-0 -translate-x-1/2 -translate-y-full pb-1 transition-opacity duration-150"
@@ -1318,7 +1914,39 @@ export const ThreeViewport: React.FC<ThreeViewportProps> = ({
               ref={arAvatarTextRef}
               className="block text-[11px] font-bold font-mono-tabular text-emerald-300"
             >
-              STANDOFF: 6m (SAFE ZONE ✓)
+              STANDOFF: 6m (Click Floor or WASD to Walk!)
+            </span>
+          </div>
+        </div>
+
+        {/* 3b. AR 3D Chemical Supply Cart Label */}
+        <div
+          ref={arChemCartBadgeRef}
+          className="absolute top-0 left-0 -translate-x-1/2 -translate-y-full pb-1 transition-opacity duration-150"
+          style={{ opacity: 0, willChange: 'transform' }}
+        >
+          <div
+            className="px-2 py-0.5 rounded border border-sky-400/60 whitespace-nowrap"
+            style={{ backgroundColor: 'rgba(9, 13, 22, 0.82)' }}
+          >
+            <span className="block text-[10px] font-bold font-mono-tabular text-sky-300">
+              🧪 Supply Cart (Click Bottles to Walk & Fetch!)
+            </span>
+          </div>
+        </div>
+
+        {/* 3c. AR 3D Safety Gear Locker Label */}
+        <div
+          ref={arSafetyRackBadgeRef}
+          className="absolute top-0 left-0 -translate-x-1/2 -translate-y-full pb-1 transition-opacity duration-150"
+          style={{ opacity: 0, willChange: 'transform' }}
+        >
+          <div
+            className="px-2 py-0.5 rounded border border-amber-400/60 whitespace-nowrap"
+            style={{ backgroundColor: 'rgba(9, 13, 22, 0.82)' }}
+          >
+            <span className="block text-[10px] font-bold font-mono-tabular text-amber-300">
+              🥽 Safety Locker (Click to Walk & Equip!)
             </span>
           </div>
         </div>

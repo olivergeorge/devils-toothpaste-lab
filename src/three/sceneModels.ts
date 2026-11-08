@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SafetyGearState } from '../types/chemistry';
+import { IngredientStep, LabLocationId, SafetyGearState } from '../types/chemistry';
 import {
   createGraduatedBeakerTexture,
   createHazardStripeTexture,
@@ -15,6 +15,11 @@ export interface VesselSpawnMetrics {
 
 export interface ScientistAvatarRig {
   group: THREE.Group;
+  bodyGroup: THREE.Group;
+  leftLegGroup: THREE.Group;
+  rightLegGroup: THREE.Group;
+  leftArmGroup: THREE.Group;
+  rightArmGroup: THREE.Group;
   gogglesGroup: THREE.Group;
   glovesGroup: THREE.Group;
   bareHandsGroup: THREE.Group;
@@ -25,6 +30,15 @@ export interface ScientistAvatarRig {
   labCoatTorsoMesh: THREE.Mesh;
   hazmatHelmetRing: THREE.Mesh;
   remoteBoxGroup: THREE.Group;
+  carriedBottleGroup: THREE.Group;
+  carriedBottleMat: THREE.MeshPhysicalMaterial;
+}
+
+export interface SupplyStationRig {
+  group: THREE.Group;
+  clickableTargets: THREE.Object3D[];
+  chemTablePos: THREE.Vector3;
+  safetyRackPos: THREE.Vector3;
 }
 
 // Helper to add a grounded radial contact shadow plane at y = 0.02
@@ -58,7 +72,6 @@ export function createLabBeakerRig(
 
   addContactShadow(group, 2.8, shadowTex);
 
-  // Materials with distinct roughness/metalness deltas >= 0.25
   const frameSteelMat = new THREE.MeshStandardMaterial({
     color: 0x334155,
     metalness: 0.85,
@@ -144,7 +157,7 @@ export function createLabBeakerRig(
     new THREE.Vector2(0.42, 0.65),
     new THREE.Vector2(0.28, 1.18),
     new THREE.Vector2(0.26, 1.48),
-    new THREE.Vector2(0.31, 1.56), // Flared pouring rim
+    new THREE.Vector2(0.31, 1.56),
     new THREE.Vector2(0.25, 1.56),
   ];
   const beakerGeo = new THREE.LatheGeometry(beakerPoints, 40);
@@ -273,7 +286,6 @@ export function createKiddiePoolRig(
     roughness: 0.3,
   });
 
-  // 1. Three Stacked Inflatable Torus Rings
   const ringRadii = [
     { y: 0.24, tube: 0.24, mat: vinylBlueMat },
     { y: 0.62, tube: 0.24, mat: vinylBlueMat },
@@ -289,14 +301,12 @@ export function createKiddiePoolRig(
     group.add(ring);
   });
 
-  // 2. Pool Basin Floor Liner
   const floorGeo = new THREE.CylinderGeometry(2.32, 2.35, 0.12, 40);
   const floorMesh = new THREE.Mesh(floorGeo, vinylBlueMat);
   floorMesh.position.y = 0.06;
   floorMesh.receiveShadow = true;
   group.add(floorMesh);
 
-  // 3. Liquid Bath Inside the Kiddie Pool
   const liquidGeo = new THREE.CylinderGeometry(2.2, 2.2, 0.65, 40);
   const liquidMat = new THREE.MeshStandardMaterial({
     color: 0x38bdf8,
@@ -309,7 +319,6 @@ export function createKiddiePoolRig(
   liquidMesh.position.y = 0.42;
   group.add(liquidMesh);
 
-  // 4. Overhead Steel A-Frame Mechanical Dump Gantry
   const postGeo = new THREE.BoxGeometry(0.18, 4.4, 0.18);
   [-2.9, 2.9].forEach((px) => {
     [-0.9, 0.9].forEach((pz) => {
@@ -321,7 +330,6 @@ export function createKiddiePoolRig(
     });
   });
 
-  // Crossbar Beam with Hazard Trim
   const beamGeo = new THREE.BoxGeometry(6.2, 0.22, 0.24);
   const crossBeam = new THREE.Mesh(beamGeo, gantrySteelMat);
   crossBeam.position.set(0, 4.15, 0);
@@ -338,7 +346,6 @@ export function createKiddiePoolRig(
   hazardPlate.position.set(0, 4.15, 0);
   group.add(hazardPlate);
 
-  // 5. Rotating Catalyst Dump Trough
   const catalystDropperGroup = new THREE.Group();
   catalystDropperGroup.position.set(0, 3.7, 0);
   const troughGeo = new THREE.CylinderGeometry(0.28, 0.28, 3.1, 24, 1, false, 0, Math.PI);
@@ -348,7 +355,6 @@ export function createKiddiePoolRig(
   catalystDropperGroup.add(troughMesh);
   group.add(catalystDropperGroup);
 
-  // 6. Safety Cones & Chemical Drums around Pool
   const coneGeo = new THREE.ConeGeometry(0.24, 0.68, 16);
   const coneMat = new THREE.MeshStandardMaterial({ color: 0xf97316, roughness: 0.4 });
   [
@@ -407,14 +413,12 @@ export function createSteelFlaskRig(
     metalness: 0.2,
   });
 
-  // 1. Circular Concrete Blast Pad Base
   const padGeo = new THREE.CylinderGeometry(4.4, 4.6, 0.3, 40);
   const padMesh = new THREE.Mesh(padGeo, concretePadMat);
   padMesh.position.y = 0.15;
   padMesh.receiveShadow = true;
   group.add(padMesh);
 
-  // 2. Giant Conical Steel Erlenmeyer Volcano Body (LatheGeometry)
   const volcanoPoints = [
     new THREE.Vector2(0.01, 0.3),
     new THREE.Vector2(2.75, 0.3),
@@ -422,7 +426,7 @@ export function createSteelFlaskRig(
     new THREE.Vector2(1.45, 4.6),
     new THREE.Vector2(0.75, 6.8),
     new THREE.Vector2(0.72, 8.2),
-    new THREE.Vector2(0.92, 8.45), // Flared high-velocity nozzle collar
+    new THREE.Vector2(0.92, 8.45),
     new THREE.Vector2(0.65, 8.45),
   ];
   const flaskGeo = new THREE.LatheGeometry(volcanoPoints, 40);
@@ -431,7 +435,6 @@ export function createSteelFlaskRig(
   flaskMesh.receiveShadow = true;
   group.add(flaskMesh);
 
-  // 3. Structural Steel Rib Rings around the Volcano Cone
   const ribSpecs = [
     { y: 1.0, r: 2.76 },
     { y: 2.8, r: 2.12 },
@@ -446,7 +449,6 @@ export function createSteelFlaskRig(
     group.add(ribMesh);
   });
 
-  // 4. Four Scaffolding Tower Columns around the Flask
   const colGeo = new THREE.BoxGeometry(0.24, 7.6, 0.24);
   const towerOffsets = [
     [-2.8, -2.8],
@@ -461,13 +463,11 @@ export function createSteelFlaskRig(
     group.add(col);
   });
 
-  // Upper Scaffolding Observation Ring with Hazard Stripe
   const upperFrameGeo = new THREE.BoxGeometry(6.0, 0.25, 6.0);
   const upperFrame = new THREE.Mesh(upperFrameGeo, hazardMat);
   upperFrame.position.y = 7.4;
   group.add(upperFrame);
 
-  // 5. Pressurized Orbeez Water-Bead Feeder Tank + Tube Manifold
   const tankGeo = new THREE.CapsuleGeometry(0.65, 1.4, 16, 24);
   const tankMat = new THREE.MeshPhysicalMaterial({
     color: 0xc084fc,
@@ -480,7 +480,6 @@ export function createSteelFlaskRig(
   orbeezTank.castShadow = true;
   group.add(orbeezTank);
 
-  // Curved TubeGeometry Manifold from Tank to Flask Throat
   const pipeCurve = new THREE.CatmullRomCurve3([
     new THREE.Vector3(3.2, 6.2, 0),
     new THREE.Vector3(2.2, 6.9, 0),
@@ -490,7 +489,6 @@ export function createSteelFlaskRig(
   const pipeMesh = new THREE.Mesh(pipeGeo, crimsonAccentMat);
   group.add(pipeMesh);
 
-  // 6. Liquid Level Indicator Window & Catalyst Dropper Hopper at Top
   const liquidGeo = new THREE.CylinderGeometry(0.62, 1.8, 2.8, 32);
   const liquidMat = new THREE.MeshStandardMaterial({
     color: 0x38bdf8,
@@ -554,7 +552,6 @@ export function createOutdoorCraterRig(
     roughness: 0.25,
   });
 
-  // 1. Excavated Earthen / Rocky Crater Rim Ring
   const craterRimGeo = new THREE.TorusGeometry(6.8, 1.35, 10, 36);
   craterRimGeo.rotateX(Math.PI / 2);
   craterRimGeo.scale(1, 0.55, 1);
@@ -564,7 +561,6 @@ export function createOutdoorCraterRig(
   craterRim.castShadow = true;
   group.add(craterRim);
 
-  // 2. Trapezoidal Reinforced Steel Reaction Bunker ("Devil's Toothpaste" Box)
   const vatGeo = new THREE.CylinderGeometry(2.6, 1.85, 2.5, 4);
   vatGeo.rotateY(Math.PI / 4);
   const vatMesh = new THREE.Mesh(vatGeo, bunkerSteelMat);
@@ -573,14 +569,12 @@ export function createOutdoorCraterRig(
   vatMesh.receiveShadow = true;
   group.add(vatMesh);
 
-  // 3. Upper Hazard Collar around the Reaction Bunker
   const collarGeo = new THREE.CylinderGeometry(2.72, 2.65, 0.35, 4);
   collarGeo.rotateY(Math.PI / 4);
   const collarMesh = new THREE.Mesh(collarGeo, hazardMat);
   collarMesh.position.y = 2.42;
   group.add(collarMesh);
 
-  // 4. Chemical Bath inside the Bunker
   const liquidGeo = new THREE.CylinderGeometry(2.3, 1.75, 1.6, 4);
   liquidGeo.rotateY(Math.PI / 4);
   const liquidMat = new THREE.MeshStandardMaterial({
@@ -592,7 +586,6 @@ export function createOutdoorCraterRig(
   liquidMesh.position.y = 1.1;
   group.add(liquidMesh);
 
-  // 5. Heavy Remote-Controlled Pneumatic Dump Bridge
   const bridgePillarGeo = new THREE.BoxGeometry(0.45, 5.4, 0.45);
   [-3.8, 3.8].forEach((bx) => {
     const pillar = new THREE.Mesh(bridgePillarGeo, bunkerSteelMat);
@@ -607,7 +600,6 @@ export function createOutdoorCraterRig(
   bridgeBeam.castShadow = true;
   group.add(bridgeBeam);
 
-  // 6. Remote Pneumatic Catalyst Dump Trough
   const catalystDropperGroup = new THREE.Group();
   catalystDropperGroup.position.set(0, 4.6, 0);
   const bigTroughGeo = new THREE.BoxGeometry(3.8, 0.65, 1.1);
@@ -616,7 +608,6 @@ export function createOutdoorCraterRig(
   catalystDropperGroup.add(bigTrough);
   group.add(catalystDropperGroup);
 
-  // 7. Four Angled Blast Deflector Shields on the Crater Perimeter
   const shieldGeo = new THREE.BoxGeometry(2.2, 1.4, 0.16);
   [
     [0, 4.6, 0],
@@ -644,10 +635,13 @@ export function createOutdoorCraterRig(
 }
 
 /**
- * SCIENTIST AVATAR WITH LIVE VR SAFETY PPE (Composite 10-part THREE.Group, bottom-center pivot y=0)
+ * SCIENTIST AVATAR WITH WALKING LIMB RIG, CARRIED ITEM BOTTLE, & LIVE VR SAFETY PPE
  */
 export function createScientistAvatar(isSoftwareGl: boolean): ScientistAvatarRig {
   const group = new THREE.Group();
+  const bodyGroup = new THREE.Group();
+  group.add(bodyGroup);
+
   const shadowTex = createRadialShadowTexture();
   addContactShadow(group, 0.75, shadowTex);
 
@@ -682,52 +676,63 @@ export function createScientistAvatar(isSoftwareGl: boolean): ScientistAvatarRig
     ior: 1.5,
   });
 
-  // 1. Boots & Legs (Grounded at y = 0)
+  // 1. Articulated Left & Right Legs (Pivoted at Hip y = 0.72 for Walking Animation!)
   const bootGeo = new THREE.BoxGeometry(0.16, 0.14, 0.26);
   const legGeo = new THREE.CapsuleGeometry(0.08, 0.52, 8, 12);
-  [-0.13, 0.13].forEach((lx) => {
-    const boot = new THREE.Mesh(bootGeo, bootMat);
-    boot.position.set(lx, 0.07, 0.03);
-    boot.castShadow = true;
-    group.add(boot);
 
-    const leg = new THREE.Mesh(legGeo, pantsMat);
-    leg.position.set(lx, 0.45, 0);
-    leg.castShadow = true;
-    group.add(leg);
-  });
+  const leftLegGroup = new THREE.Group();
+  leftLegGroup.position.set(-0.13, 0.72, 0);
+  const leftLegMesh = new THREE.Mesh(legGeo, pantsMat);
+  leftLegMesh.position.set(0, -0.27, 0);
+  leftLegMesh.castShadow = true;
+  const leftBootMesh = new THREE.Mesh(bootGeo, bootMat);
+  leftBootMesh.position.set(0, -0.65, 0.03);
+  leftBootMesh.castShadow = true;
+  leftLegGroup.add(leftLegMesh, leftBootMesh);
+  bodyGroup.add(leftLegGroup);
+
+  const rightLegGroup = new THREE.Group();
+  rightLegGroup.position.set(0.13, 0.72, 0);
+  const rightLegMesh = new THREE.Mesh(legGeo, pantsMat);
+  rightLegMesh.position.set(0, -0.27, 0);
+  rightLegMesh.castShadow = true;
+  const rightBootMesh = new THREE.Mesh(bootGeo, bootMat);
+  rightBootMesh.position.set(0, -0.65, 0.03);
+  rightBootMesh.castShadow = true;
+  rightLegGroup.add(rightLegMesh, rightBootMesh);
+  bodyGroup.add(rightLegGroup);
 
   // 2. Torso: Lab Coat vs Thermal Hazmat Suit
   const torsoGeo = new THREE.CapsuleGeometry(0.22, 0.48, 12, 20);
   const labCoatTorsoMesh = new THREE.Mesh(torsoGeo, labCoatMat);
   labCoatTorsoMesh.position.set(0, 1.05, 0);
   labCoatTorsoMesh.castShadow = true;
-  group.add(labCoatTorsoMesh);
+  bodyGroup.add(labCoatTorsoMesh);
 
   const hazmatGeo = new THREE.CapsuleGeometry(0.245, 0.5, 12, 20);
   const hazmatTorsoMesh = new THREE.Mesh(hazmatGeo, hazmatMat);
   hazmatTorsoMesh.position.set(0, 1.05, 0);
   hazmatTorsoMesh.castShadow = true;
-  group.add(hazmatTorsoMesh);
+  bodyGroup.add(hazmatTorsoMesh);
 
   // 3. Head & Hair/Cap
   const headGeo = new THREE.SphereGeometry(0.17, 20, 20);
   const headMesh = new THREE.Mesh(headGeo, skinMat);
   headMesh.position.set(0, 1.56, 0);
   headMesh.castShadow = true;
-  group.add(headMesh);
+  bodyGroup.add(headMesh);
 
   const capGeo = new THREE.SphereGeometry(0.178, 20, 12, 0, Math.PI * 2, 0, Math.PI * 0.55);
   const capMesh = new THREE.Mesh(capGeo, bootMat);
   capMesh.position.set(0, 1.58, -0.01);
-  group.add(capMesh);
+  bodyGroup.add(capMesh);
 
   // 4. Hazmat Helmet Collar Ring
   const collarRingGeo = new THREE.TorusGeometry(0.2, 0.05, 12, 24);
   collarRingGeo.rotateX(Math.PI / 2);
   const hazmatHelmetRing = new THREE.Mesh(collarRingGeo, hazmatMat);
   hazmatHelmetRing.position.set(0, 1.38, 0);
-  group.add(hazmatHelmetRing);
+  bodyGroup.add(hazmatHelmetRing);
 
   // 5. Chemical Splash Goggles & Face Visor (Toggleable PPE)
   const gogglesGroup = new THREE.Group();
@@ -739,17 +744,28 @@ export function createScientistAvatar(isSoftwareGl: boolean): ScientistAvatarRig
   const lensGeo = new THREE.BoxGeometry(0.24, 0.07, 0.09);
   const lensMesh = new THREE.Mesh(lensGeo, goggleLensMat);
   gogglesGroup.add(lensMesh);
-  group.add(gogglesGroup);
+  bodyGroup.add(gogglesGroup);
 
-  // 6. Arms & Heavy-Duty Nitrile Chemical Gloves (Toggleable PPE)
+  // 6. Articulated Arms & Hands (Pivoted at Shoulder y = 1.24 for Walking & Carrying!)
   const armGeo = new THREE.CapsuleGeometry(0.065, 0.36, 8, 12);
-  [-0.28, 0.28].forEach((ax) => {
-    const arm = new THREE.Mesh(armGeo, labCoatMat);
-    arm.position.set(ax, 1.06, 0.08);
-    arm.rotation.x = -0.45;
-    arm.castShadow = true;
-    group.add(arm);
-  });
+
+  const leftArmGroup = new THREE.Group();
+  leftArmGroup.position.set(-0.28, 1.24, 0);
+  const leftArmMesh = new THREE.Mesh(armGeo, labCoatMat);
+  leftArmMesh.position.set(0, -0.18, 0.08);
+  leftArmMesh.rotation.x = -0.45;
+  leftArmMesh.castShadow = true;
+  leftArmGroup.add(leftArmMesh);
+  bodyGroup.add(leftArmGroup);
+
+  const rightArmGroup = new THREE.Group();
+  rightArmGroup.position.set(0.28, 1.24, 0);
+  const rightArmMesh = new THREE.Mesh(armGeo, labCoatMat);
+  rightArmMesh.position.set(0, -0.18, 0.08);
+  rightArmMesh.rotation.x = -0.45;
+  rightArmMesh.castShadow = true;
+  rightArmGroup.add(rightArmMesh);
+  bodyGroup.add(rightArmGroup);
 
   const glovesGroup = new THREE.Group();
   const gloveGeo = new THREE.CapsuleGeometry(0.075, 0.16, 8, 12);
@@ -759,7 +775,7 @@ export function createScientistAvatar(isSoftwareGl: boolean): ScientistAvatarRig
     glove.rotation.x = -0.65;
     glovesGroup.add(glove);
   });
-  group.add(glovesGroup);
+  bodyGroup.add(glovesGroup);
 
   // 6b. Bare Hands (Visible when Gloves are unchecked — gets dyed bright colors when pouring!)
   const bareHandsGroup = new THREE.Group();
@@ -774,7 +790,7 @@ export function createScientistAvatar(isSoftwareGl: boolean): ScientistAvatarRig
     hand.position.set(hx, 0.89, 0.28);
     bareHandsGroup.add(hand);
   });
-  group.add(bareHandsGroup);
+  bodyGroup.add(bareHandsGroup);
 
   // 6c. 3D Foam Snowman Suit (Appears when buried in a big eruption without Hazmat Suit!)
   const foamSnowmanGroup = new THREE.Group();
@@ -792,7 +808,7 @@ export function createScientistAvatar(isSoftwareGl: boolean): ScientistAvatarRig
   snowTop.position.set(0, 1.65, 0);
   foamSnowmanGroup.add(snowBottom, snowMid, snowTop);
   foamSnowmanGroup.visible = false;
-  group.add(foamSnowmanGroup);
+  bodyGroup.add(foamSnowmanGroup);
 
   // 7. Remote Detonator Trigger Box in Hands
   const remoteBoxGroup = new THREE.Group();
@@ -806,10 +822,34 @@ export function createScientistAvatar(isSoftwareGl: boolean): ScientistAvatarRig
   const btnMesh = new THREE.Mesh(btnGeo, btnMat);
   btnMesh.position.set(0, 0.08, 0);
   remoteBoxGroup.add(btnMesh);
-  group.add(remoteBoxGroup);
+  bodyGroup.add(remoteBoxGroup);
+
+  // 8. Carried 3D Chemical Bottle in Hands (Shown when walking to fetch/pour an ingredient!)
+  const carriedBottleGroup = new THREE.Group();
+  carriedBottleGroup.position.set(0, 0.98, 0.38);
+  const carriedBottleMat = new THREE.MeshPhysicalMaterial({
+    color: 0x38bdf8,
+    roughness: 0.18,
+    metalness: 0.1,
+    clearcoat: 0.85,
+  });
+  const cBody = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.15, 0.38, 18), carriedBottleMat);
+  const cNeck = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.08, 0.12, 14),
+    new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.3 })
+  );
+  cNeck.position.y = 0.24;
+  carriedBottleGroup.add(cBody, cNeck);
+  carriedBottleGroup.visible = false;
+  bodyGroup.add(carriedBottleGroup);
 
   return {
     group,
+    bodyGroup,
+    leftLegGroup,
+    rightLegGroup,
+    leftArmGroup,
+    rightArmGroup,
     gogglesGroup,
     glovesGroup,
     bareHandsGroup,
@@ -820,6 +860,8 @@ export function createScientistAvatar(isSoftwareGl: boolean): ScientistAvatarRig
     labCoatTorsoMesh,
     hazmatHelmetRing,
     remoteBoxGroup,
+    carriedBottleGroup,
+    carriedBottleMat,
   };
 }
 
@@ -839,17 +881,216 @@ export function syncScientistAvatarPpe(
   rig.hazmatTorsoMesh.visible = gear.hazmatSuit;
   rig.hazmatHelmetRing.visible = gear.hazmatSuit;
   rig.labCoatTorsoMesh.visible = !gear.hazmatSuit;
-  rig.remoteBoxGroup.visible = gear.remoteTriggerArmed;
+  rig.remoteBoxGroup.visible = gear.remoteTriggerArmed && !rig.carriedBottleGroup.visible;
 }
 
 /**
- * Natural Outdoor Perimeter: Instanced Pine Grove (>40 multi-part trees) & Boulders
- * Never boxes the scene inside indoor walls!
+ * Interactive 3D Supply Stations (Chemical Cart & Safety Locker Rack) that the Scientist can walk to!
  */
-export function createOutdoorEnvironment(): THREE.Group {
-  const envGroup = new THREE.Group();
+export function createLabSupplyStations(): SupplyStationRig {
+  const group = new THREE.Group();
+  const clickableTargets: THREE.Object3D[] = [];
+  const shadowTex = createRadialShadowTexture();
 
-  const treeCount = 48;
+  const chemTablePos = new THREE.Vector3(-4.2, 0, 3.2);
+  const safetyRackPos = new THREE.Vector3(4.2, 0, 3.2);
+
+  // --- STATION A: 3D CHEMICAL SUPPLY TABLE (Left Flank) ---
+  const chemCart = new THREE.Group();
+  chemCart.position.copy(chemTablePos);
+  chemCart.rotation.y = 0.35;
+  addContactShadow(chemCart, 1.5, shadowTex);
+
+  const cartSteelMat = new THREE.MeshStandardMaterial({
+    color: 0x334155,
+    metalness: 0.8,
+    roughness: 0.28,
+  });
+  const cartTopMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    metalness: 0.2,
+    roughness: 0.65,
+  });
+
+  const cartTop = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.1, 1.1), cartTopMat);
+  cartTop.position.y = 0.95;
+  cartTop.castShadow = true;
+  cartTop.receiveShadow = true;
+  chemCart.add(cartTop);
+
+  const cartShelf = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.08, 0.95), cartSteelMat);
+  cartShelf.position.y = 0.35;
+  chemCart.add(cartShelf);
+
+  const legGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.95, 12);
+  [
+    [-1.0, -0.45],
+    [1.0, -0.45],
+    [-1.0, 0.45],
+    [1.0, 0.45],
+  ].forEach(([lx, lz]) => {
+    const leg = new THREE.Mesh(legGeo, cartSteelMat);
+    leg.position.set(lx, 0.475, lz);
+    chemCart.add(leg);
+  });
+
+  // 4 Interactive 3D Ingredient Containers on the Cart
+  const bottleSpecs: { step: IngredientStep; x: number; color: number; radius: number; h: number }[] = [
+    { step: 'peroxide', x: -0.78, color: 0x38bdf8, radius: 0.18, h: 0.52 },
+    { step: 'soap', x: -0.26, color: 0x10b981, radius: 0.14, h: 0.46 },
+    { step: 'orbeez', x: 0.26, color: 0xc084fc, radius: 0.16, h: 0.42 },
+    { step: 'catalyst', x: 0.78, color: 0xf59e0b, radius: 0.15, h: 0.44 },
+  ];
+
+  bottleSpecs.forEach((b) => {
+    const bGroup = new THREE.Group();
+    bGroup.position.set(b.x, 1.0 + b.h * 0.5, 0);
+    const bMat = new THREE.MeshPhysicalMaterial({
+      color: b.color,
+      roughness: 0.2,
+      metalness: 0.1,
+      clearcoat: 0.8,
+    });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(b.radius * 0.85, b.radius, b.h, 18), bMat);
+    body.castShadow = true;
+    const cap = new THREE.Mesh(
+      new THREE.CylinderGeometry(b.radius * 0.35, b.radius * 0.4, 0.1, 12),
+      new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.3 })
+    );
+    cap.position.y = b.h * 0.5 + 0.05;
+    bGroup.add(body, cap);
+
+    // Tag for 3D raycast click-to-fetch!
+    body.userData = { interactType: 'fetch_ingredient', step: b.step };
+    cap.userData = { interactType: 'fetch_ingredient', step: b.step };
+    clickableTargets.push(body, cap);
+    chemCart.add(bGroup);
+  });
+
+  group.add(chemCart);
+
+  // --- STATION B: 3D SAFETY GEAR LOCKER RACK (Right Flank) ---
+  const safetyRack = new THREE.Group();
+  safetyRack.position.copy(safetyRackPos);
+  safetyRack.rotation.y = -0.35;
+  addContactShadow(safetyRack, 1.3, shadowTex);
+
+  const rackFrame = new THREE.Mesh(
+    new THREE.BoxGeometry(1.5, 1.9, 0.65),
+    new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.6, metalness: 0.3 })
+  );
+  rackFrame.position.y = 0.95;
+  rackFrame.castShadow = true;
+  safetyRack.add(rackFrame);
+
+  // Hazmat Suit hanging inside Locker
+  const hangingHazmat = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.24, 0.55, 10, 16),
+    new THREE.MeshPhysicalMaterial({ color: 0xf59e0b, roughness: 0.25, clearcoat: 0.6 })
+  );
+  hangingHazmat.position.set(-0.28, 1.0, 0.22);
+  hangingHazmat.userData = { interactType: 'fetch_safety' };
+  clickableTargets.push(hangingHazmat);
+  safetyRack.add(hangingHazmat);
+
+  // Goggles on Locker Shelf
+  const shelfGoggles = new THREE.Mesh(
+    new THREE.BoxGeometry(0.32, 0.14, 0.16),
+    new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.4, roughness: 0.15 })
+  );
+  shelfGoggles.position.set(0.32, 1.35, 0.24);
+  shelfGoggles.userData = { interactType: 'fetch_safety' };
+  clickableTargets.push(shelfGoggles);
+  safetyRack.add(shelfGoggles);
+
+  // Gloves on Locker Shelf
+  const shelfGloves = new THREE.Mesh(
+    new THREE.SphereGeometry(0.15, 14, 14),
+    new THREE.MeshStandardMaterial({ color: 0x10b981, roughness: 0.3 })
+  );
+  shelfGloves.position.set(0.32, 0.85, 0.24);
+  shelfGloves.userData = { interactType: 'fetch_safety' };
+  clickableTargets.push(shelfGloves);
+  safetyRack.add(shelfGloves);
+
+  rackFrame.userData = { interactType: 'fetch_safety' };
+  clickableTargets.push(rackFrame);
+
+  group.add(safetyRack);
+
+  return {
+    group,
+    clickableTargets,
+    chemTablePos,
+    safetyRackPos,
+  };
+}
+
+/**
+ * Phat Gus the Squirrel helper so he appears in every location!
+ */
+function createPhatGusProp(): THREE.Group {
+  const gusGroup = new THREE.Group();
+  const stumpMat = new THREE.MeshStandardMaterial({ color: 0x5c2d0c, roughness: 0.88 });
+  const furMat = new THREE.MeshStandardMaterial({ color: 0x9a5b25, roughness: 0.72 });
+  const bellyMat = new THREE.MeshStandardMaterial({ color: 0xfde68a, roughness: 0.65 });
+  const goggleMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.4, roughness: 0.15 });
+
+  const stumpMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.52, 0.65, 16), stumpMat);
+  stumpMesh.position.y = 0.325;
+  stumpMesh.castShadow = true;
+  gusGroup.add(stumpMesh);
+
+  const bodyMesh = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 16), furMat);
+  bodyMesh.scale.set(1.0, 1.25, 0.95);
+  bodyMesh.position.set(0, 0.92, 0);
+  bodyMesh.castShadow = true;
+  gusGroup.add(bodyMesh);
+
+  const bellyMesh = new THREE.Mesh(new THREE.SphereGeometry(0.19, 14, 14), bellyMat);
+  bellyMesh.scale.set(0.85, 1.1, 0.6);
+  bellyMesh.position.set(0, 0.9, 0.1);
+  gusGroup.add(bellyMesh);
+
+  const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 16), furMat);
+  headMesh.position.set(0, 1.26, 0.04);
+  gusGroup.add(headMesh);
+
+  const earGeo = new THREE.ConeGeometry(0.05, 0.12, 8);
+  [-0.09, 0.09].forEach((ex) => {
+    const ear = new THREE.Mesh(earGeo, furMat);
+    ear.position.set(ex, 1.42, 0.02);
+    gusGroup.add(ear);
+  });
+
+  const goggleMesh = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.07, 0.08), goggleMat);
+  goggleMesh.position.set(0, 1.28, 0.16);
+  gusGroup.add(goggleMesh);
+
+  const tailCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 0.78, -0.18),
+    new THREE.Vector3(0, 1.15, -0.38),
+    new THREE.Vector3(0, 1.48, -0.24),
+  ]);
+  const tailGeo = new THREE.TubeGeometry(tailCurve, 12, 0.13, 10, false);
+  const tailMesh = new THREE.Mesh(tailGeo, furMat);
+  tailMesh.castShadow = true;
+  gusGroup.add(tailMesh);
+
+  return gusGroup;
+}
+
+/**
+ * Creates all 4 switchable 3D Lab Environments / Locations!
+ * 1. crunchlabs_warehouse (CrunchLabs Studio)
+ * 2. suburban_backyard (Backyard Lawn & Pine Grove)
+ * 3. science_gymnasium (School Science Fair Gym with 3.05m Basketball Hoop & Bleachers)
+ * 4. desert_proving_ground (Mojave Red-Rock Canyon & Bunker)
+ */
+export function createAllLocationEnvironments(): Record<LabLocationId, THREE.Group> {
+  // 1. SUBURBAN BACKYARD (Pine Grove, Wooden Fence, & Phat Gus Stump)
+  const backyardGroup = new THREE.Group();
+  const treeCount = 44;
   const trunkGeo = new THREE.CylinderGeometry(0.22, 0.35, 2.2, 8);
   trunkGeo.translate(0, 1.1, 0);
   const trunkMat = new THREE.MeshStandardMaterial({ color: 0x451a03, roughness: 0.9 });
@@ -864,19 +1105,14 @@ export function createOutdoorEnvironment(): THREE.Group {
   const foliageLowerInstanced = new THREE.InstancedMesh(foliageLowerGeo, foliageMat, treeCount);
   const foliageUpperInstanced = new THREE.InstancedMesh(foliageUpperGeo, foliageMat, treeCount);
 
-  trunkInstanced.castShadow = true;
-  foliageLowerInstanced.castShadow = true;
-  foliageUpperInstanced.castShadow = true;
-
   const dummy = new THREE.Object3D();
   const tintColor = new THREE.Color();
 
   for (let i = 0; i < treeCount; i++) {
     const angle = (i / treeCount) * Math.PI * 2 + (i % 3) * 0.08;
-    const radius = 34 + (i % 5) * 6.5;
+    const radius = 32 + (i % 5) * 6.0;
     const x = Math.cos(angle) * radius;
     const z = Math.sin(angle) * radius;
-    // ±15% per-instance scale variation
     const s = 0.85 + ((i * 17) % 30) / 100;
 
     dummy.position.set(x, 0, z);
@@ -888,120 +1124,189 @@ export function createOutdoorEnvironment(): THREE.Group {
     foliageLowerInstanced.setMatrixAt(i, dummy.matrix);
     foliageUpperInstanced.setMatrixAt(i, dummy.matrix);
 
-    // Subtle per-instance foliage tint variation
-    tintColor.setHSL(0.38 + (i % 5) * 0.012, 0.55, 0.22 + (i % 4) * 0.03);
+    tintColor.setHSL(0.36 + (i % 5) * 0.015, 0.62, 0.26 + (i % 4) * 0.03);
     foliageLowerInstanced.setColorAt(i, tintColor);
     foliageUpperInstanced.setColorAt(i, tintColor.clone().multiplyScalar(1.12));
   }
-
   trunkInstanced.instanceMatrix.needsUpdate = true;
   foliageLowerInstanced.instanceMatrix.needsUpdate = true;
   foliageUpperInstanced.instanceMatrix.needsUpdate = true;
   if (foliageLowerInstanced.instanceColor) foliageLowerInstanced.instanceColor.needsUpdate = true;
   if (foliageUpperInstanced.instanceColor) foliageUpperInstanced.instanceColor.needsUpdate = true;
-
   trunkInstanced.computeBoundingSphere();
   foliageLowerInstanced.computeBoundingSphere();
   foliageUpperInstanced.computeBoundingSphere();
+  backyardGroup.add(trunkInstanced, foliageLowerInstanced, foliageUpperInstanced);
 
-  envGroup.add(trunkInstanced, foliageLowerInstanced, foliageUpperInstanced);
+  // Cedar Backyard Fence Arc behind the yard
+  const fenceMat = new THREE.MeshStandardMaterial({ color: 0x7c2d12, roughness: 0.85 });
+  const fenceGeo = new THREE.BoxGeometry(3.8, 2.2, 0.16);
+  for (let f = -5; f <= 5; f++) {
+    const angle = f * 0.16 + Math.PI;
+    const fx = Math.sin(angle) * 22;
+    const fz = Math.cos(angle) * 22;
+    const fencePanel = new THREE.Mesh(fenceGeo, fenceMat);
+    fencePanel.position.set(fx, 1.1, fz);
+    fencePanel.rotation.y = angle;
+    fencePanel.castShadow = true;
+    backyardGroup.add(fencePanel);
+  }
 
-  // Perimeter Boulders (InstancedMesh > 20 items)
-  const rockCount = 28;
-  const rockGeo = new THREE.DodecahedronGeometry(1.2, 1);
-  rockGeo.translate(0, 0.65, 0);
-  const rockMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.88,
-    metalness: 0.05,
+  const gusBackyard = createPhatGusProp();
+  gusBackyard.position.set(-2.9, 0, 2.4);
+  gusBackyard.rotation.y = 0.65;
+  backyardGroup.add(gusBackyard);
+
+  // 2. CRUNCHLABS WAREHOUSE STUDIO (Steel Trusses, Orange Tool Chests, Blueprint Boards)
+  const warehouseGroup = new THREE.Group();
+  const steelTrussMat = new THREE.MeshStandardMaterial({
+    color: 0x334155,
+    metalness: 0.8,
+    roughness: 0.3,
+  });
+  const crunchOrangeMat = new THREE.MeshStandardMaterial({
+    color: 0xf97316,
+    metalness: 0.4,
+    roughness: 0.35,
+  });
+  const crunchBlueMat = new THREE.MeshStandardMaterial({
+    color: 0x0284c7,
+    metalness: 0.4,
+    roughness: 0.35,
+  });
+  const boardWhiteMat = new THREE.MeshStandardMaterial({
+    color: 0xe2e8f0,
+    roughness: 0.25,
+  });
+
+  // Warehouse Steel Columns & Overhead Roof Trusses
+  const pillarGeo = new THREE.BoxGeometry(0.55, 16, 0.55);
+  const trussBeamGeo = new THREE.BoxGeometry(32, 0.55, 0.55);
+  [-14, -7, 0, 7, 14].forEach((zPos) => {
+    [-16, 16].forEach((xPos) => {
+      const col = new THREE.Mesh(pillarGeo, steelTrussMat);
+      col.position.set(xPos, 8, zPos);
+      warehouseGroup.add(col);
+    });
+    const beam = new THREE.Mesh(trussBeamGeo, steelTrussMat);
+    beam.position.set(0, 15.8, zPos);
+    warehouseGroup.add(beam);
+  });
+
+  // Giant CrunchLabs Rolling Tool Cabinets & Blueprint Whiteboards along the back
+  [-8.5, 8.5].forEach((xPos) => {
+    const toolChest = new THREE.Mesh(new THREE.BoxGeometry(3.6, 1.6, 1.2), crunchOrangeMat);
+    toolChest.position.set(xPos, 0.8, -11);
+    toolChest.castShadow = true;
+    warehouseGroup.add(toolChest);
+
+    const whiteboard = new THREE.Mesh(new THREE.BoxGeometry(4.2, 2.6, 0.15), boardWhiteMat);
+    whiteboard.position.set(xPos * 0.55, 2.6, -12.5);
+    warehouseGroup.add(whiteboard);
+
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(4.4, 2.8, 0.1), crunchBlueMat);
+    frame.position.set(xPos * 0.55, 2.6, -12.55);
+    warehouseGroup.add(frame);
+  });
+
+  const gusWarehouse = createPhatGusProp();
+  gusWarehouse.position.set(-2.9, 0, 2.4);
+  gusWarehouse.rotation.y = 0.65;
+  warehouseGroup.add(gusWarehouse);
+
+  // 3. SCHOOL SCIENCE FAIR GYMNASIUM (3.05m Basketball Hoop, Bleachers, & Science Fair Banners)
+  const gymGroup = new THREE.Group();
+  const bleacherWoodMat = new THREE.MeshStandardMaterial({ color: 0xb45309, roughness: 0.55 });
+  const hoopPoleMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.8, roughness: 0.25 });
+  const rimOrangeMat = new THREE.MeshStandardMaterial({ color: 0xea580c, metalness: 0.5, roughness: 0.3 });
+
+  // Regulation 3.05m (10-ft) Basketball Hoop right beside the vessel for visual height comparison!
+  const hoopGroup = new THREE.Group();
+  hoopGroup.position.set(4.8, 0, -3.5);
+  hoopGroup.rotation.y = -0.5;
+  const hoopPost = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.16, 3.8, 16), hoopPoleMat);
+  hoopPost.position.set(0, 1.9, -1.2);
+  const hoopArm = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 1.2), hoopPoleMat);
+  hoopArm.position.set(0, 3.5, -0.6);
+  const backboard = new THREE.Mesh(
+    new THREE.BoxGeometry(1.8, 1.15, 0.08),
+    new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.15 })
+  );
+  backboard.position.set(0, 3.45, 0);
+  const hoopRim = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.03, 12, 24), rimOrangeMat);
+  hoopRim.rotation.x = Math.PI / 2;
+  hoopRim.position.set(0, 3.05, 0.34);
+  hoopGroup.add(hoopPost, hoopArm, backboard, hoopRim);
+  gymGroup.add(hoopGroup);
+
+  // Wooden Gym Bleachers on Left & Right Flanks
+  [-13, 13].forEach((bx) => {
+    for (let tier = 0; tier < 4; tier++) {
+      const bench = new THREE.Mesh(
+        new THREE.BoxGeometry(1.2, 0.45 * (tier + 1), 16),
+        bleacherWoodMat
+      );
+      bench.position.set(bx + (bx > 0 ? tier * 1.1 : -tier * 1.1), 0.225 * (tier + 1), -2);
+      bench.castShadow = true;
+      gymGroup.add(bench);
+    }
+  });
+
+  const gusGym = createPhatGusProp();
+  gusGym.position.set(-2.9, 0, 2.4);
+  gusGym.rotation.y = 0.65;
+  gymGroup.add(gusGym);
+
+  // 4. MOJAVE DESERT BLAST CANYON (Red-Rock Mesas, Boulders, & Concrete Bunker)
+  const desertGroup = new THREE.Group();
+  const mesaMat = new THREE.MeshStandardMaterial({
+    color: 0x9a3412,
+    roughness: 0.92,
+    metalness: 0.04,
     flatShading: true,
   });
-  const rockInstanced = new THREE.InstancedMesh(rockGeo, rockMat, rockCount);
-  rockInstanced.castShadow = true;
-  rockInstanced.receiveShadow = true;
+  const cactusMat = new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.75 });
 
+  // Perimeter Red-Rock Canyon Butte Pillars & Boulders
+  const rockCount = 32;
+  const rockGeo = new THREE.DodecahedronGeometry(1.8, 1);
+  rockGeo.translate(0, 0.9, 0);
+  const rockInstanced = new THREE.InstancedMesh(rockGeo, mesaMat, rockCount);
   for (let i = 0; i < rockCount; i++) {
-    const angle = (i / rockCount) * Math.PI * 2 + 0.15;
-    const radius = 26 + (i % 4) * 4.5;
-    const sx = 0.85 + (i % 5) * 0.25;
-    const sy = 0.65 + (i % 3) * 0.22;
-    const sz = 0.85 + (i % 4) * 0.25;
-
+    const angle = (i / rockCount) * Math.PI * 2 + 0.12;
+    const radius = 26 + (i % 4) * 5.5;
+    const sx = 1.2 + (i % 5) * 0.65;
+    const sy = 1.0 + (i % 4) * 1.6;
+    const sz = 1.2 + (i % 3) * 0.65;
     dummy.position.set(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
-    dummy.rotation.set(0, i * 0.8, 0);
+    dummy.rotation.set(0, i * 0.9, 0);
     dummy.scale.set(sx, sy, sz);
     dummy.updateMatrix();
     rockInstanced.setMatrixAt(i, dummy.matrix);
-
-    tintColor.setHSL(0.6, 0.12, 0.25 + (i % 4) * 0.04);
-    rockInstanced.setColorAt(i, tintColor);
   }
   rockInstanced.instanceMatrix.needsUpdate = true;
-  if (rockInstanced.instanceColor) rockInstanced.instanceColor.needsUpdate = true;
   rockInstanced.computeBoundingSphere();
+  desertGroup.add(rockInstanced);
 
-  envGroup.add(rockInstanced);
+  // Saguaro Cacti around the desert perimeter
+  for (let c = 0; c < 12; c++) {
+    const angle = (c / 12) * Math.PI * 2 + 0.3;
+    const r = 19 + (c % 3) * 3.5;
+    const cactus = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 1.8, 8, 12), cactusMat);
+    cactus.position.set(Math.cos(angle) * r, 1.1, Math.sin(angle) * r);
+    cactus.castShadow = true;
+    desertGroup.add(cactus);
+  }
 
-  // Mark Rober Easter Egg: "Phat Gus" the Backyard Squirrel watching from a VIP Tree Stump with mini safety goggles!
-  const gusGroup = new THREE.Group();
-  gusGroup.position.set(-3.2, 0, 3.6);
-  gusGroup.rotation.y = 0.65;
+  const gusDesert = createPhatGusProp();
+  gusDesert.position.set(-2.9, 0, 2.4);
+  gusDesert.rotation.y = 0.65;
+  desertGroup.add(gusDesert);
 
-  const stumpMat = new THREE.MeshStandardMaterial({ color: 0x5c2d0c, roughness: 0.88 });
-  const furMat = new THREE.MeshStandardMaterial({ color: 0x9a5b25, roughness: 0.72 });
-  const bellyMat = new THREE.MeshStandardMaterial({ color: 0xfde68a, roughness: 0.65 });
-  const goggleMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.4, roughness: 0.15 });
-
-  // 1. VIP Observation Stump
-  const stumpMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.52, 0.65, 16), stumpMat);
-  stumpMesh.position.y = 0.325;
-  stumpMesh.castShadow = true;
-  gusGroup.add(stumpMesh);
-
-  // 2. Plump Squirrel Body ("Phat Gus")
-  const bodyMesh = new THREE.Mesh(new THREE.SphereGeometry(0.24, 16, 16), furMat);
-  bodyMesh.scale.set(1.0, 1.25, 0.95);
-  bodyMesh.position.set(0, 0.92, 0);
-  bodyMesh.castShadow = true;
-  gusGroup.add(bodyMesh);
-
-  // 3. Belly Patch
-  const bellyMesh = new THREE.Mesh(new THREE.SphereGeometry(0.19, 14, 14), bellyMat);
-  bellyMesh.scale.set(0.85, 1.1, 0.6);
-  bellyMesh.position.set(0, 0.9, 0.1);
-  gusGroup.add(bellyMesh);
-
-  // 4. Squirrel Head
-  const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.16, 16, 16), furMat);
-  headMesh.position.set(0, 1.26, 0.04);
-  gusGroup.add(headMesh);
-
-  // 5. Perky Ears (2x)
-  const earGeo = new THREE.ConeGeometry(0.05, 0.12, 8);
-  [-0.09, 0.09].forEach((ex) => {
-    const ear = new THREE.Mesh(earGeo, furMat);
-    ear.position.set(ex, 1.42, 0.02);
-    gusGroup.add(ear);
-  });
-
-  // 6. Mini Squirrel Splash Goggles!
-  const goggleMesh = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.07, 0.08), goggleMat);
-  goggleMesh.position.set(0, 1.28, 0.16);
-  gusGroup.add(goggleMesh);
-
-  // 7. Giant Fluffy Bushy Tail
-  const tailCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0, 0.78, -0.18),
-    new THREE.Vector3(0, 1.15, -0.38),
-    new THREE.Vector3(0, 1.48, -0.24),
-  ]);
-  const tailGeo = new THREE.TubeGeometry(tailCurve, 12, 0.13, 10, false);
-  const tailMesh = new THREE.Mesh(tailGeo, furMat);
-  tailMesh.castShadow = true;
-  gusGroup.add(tailMesh);
-
-  envGroup.add(gusGroup);
-
-  return envGroup;
+  return {
+    crunchlabs_warehouse: warehouseGroup,
+    suburban_backyard: backyardGroup,
+    science_gymnasium: gymGroup,
+    desert_proving_ground: desertGroup,
+  };
 }
-

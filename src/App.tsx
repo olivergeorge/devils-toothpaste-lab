@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FileText, Sparkles } from 'lucide-react';
+import { FileText, Search } from 'lucide-react';
 import {
   CameraPresetId,
   CapturedPhoto,
   ExperimentConfig,
   IngredientStep,
+  LabLocationId,
   LabMishap,
   PouredStepRecord,
   ReactionSimulationResult,
@@ -15,6 +16,7 @@ import {
 import {
   DYE_COLORS,
   INGREDIENT_META,
+  LAB_LOCATIONS,
   PRESET_EXPERIMENTS,
   SCALE_ENVIRONMENTS,
   evaluateExperimentMishaps,
@@ -29,6 +31,7 @@ import { soundEngine } from './utils/soundEngine';
 import { ThreeViewport } from './components/ThreeViewport';
 import { ScienceReportModal } from './components/ScienceReportModal';
 import { LiveScienceReportDock } from './components/LiveScienceReportDock';
+import { PhatGusOopsEvent, PhatGusOopsOverlay } from './components/PhatGusOopsOverlay';
 
 const STORAGE_KEY_REPORTS = 'elephants_toothpaste_saved_reports_v1';
 
@@ -47,6 +50,15 @@ export default function App() {
   const [eruptionTriggerCount, setEruptionTriggerCount] = useState(0);
   const [cleanupTriggerCount, setCleanupTriggerCount] = useState(0);
   const [pourStepTrigger, setPourStepTrigger] = useState<{ step: string; count: number }>({
+    step: 'peroxide',
+    count: 0,
+  });
+  const [fetchErrandTrigger, setFetchErrandTrigger] = useState<{
+    type: 'ingredient' | 'safety';
+    step?: IngredientStep;
+    count: number;
+  }>({
+    type: 'ingredient',
     step: 'peroxide',
     count: 0,
   });
@@ -81,15 +93,13 @@ export default function App() {
   const safetyGearRef = useRef(safetyGear);
   safetyGearRef.current = safetyGear;
 
-  // Hilarious "Soap & Foam in Your Eyes!" Screen Splat State (when Goggles are off!)
-  const [soapInEyeActive, setSoapInEyeActive] = useState(false);
-  const [soapInEyeReason, setSoapInEyeReason] = useState<string>(
-    'You squirted Dish Soap without wearing Splash Goggles!'
-  );
+  // Cartoon "Phat Gus" Squirrel Oops Overlay State (Magnifying Glass Safety Inspector OR Sudsy Mop Cleanup!)
+  const [gusEvent, setGusEvent] = useState<PhatGusOopsEvent | null>(null);
+  const [gusFixAction, setGusFixAction] = useState<(() => void) | null>(null);
 
   // Mark Rober Live Commentary & 3-2-1 Countdown State
   const [roberQuote, setRoberQuote] = useState<string>(
-    'Press & hold any bottle on the bench (or drag it over the 3D container) to pour! Watch out: your Splash Goggles are UNCHECKED—squirting too much soap without goggles will splat soap in your eyes!'
+    'Press & hold any bottle on the bench (or drag it over the 3D container) to pour! Phat Gus the Squirrel is watching with his Magnifying Glass & Mop!'
   );
   const [countdownNumber, setCountdownNumber] = useState<number | null>(null);
   const [showArMeasures, setShowArMeasures] = useState<boolean>(true);
@@ -145,14 +155,41 @@ export default function App() {
     [config, safetyGear, activeResult, predictedResult]
   );
 
+  const handleEquipAllRequiredPpe = useCallback(() => {
+    soundEngine.playUiClick(720);
+    setGusEvent(null);
+    setSafetyGear((prev) => ({
+      goggles: true,
+      gloves: true,
+      hazmatSuit:
+        safetyAssessment.requiresHazmat || configRef.current.peroxideConcentration >= 25,
+      remoteTriggerArmed:
+        safetyAssessment.requiresRemoteTrigger || configRef.current.peroxideConcentration >= 25,
+      standBackMeters: Math.max(
+        prev.standBackMeters,
+        safetyAssessment.minSafeDistanceMeters
+      ),
+    }));
+    setRoberQuote(
+      'Phat Gus strapped on all your Safety Gear! Goggles, Gloves, and Hazmat Suit are equipped on your 3D Scientist!'
+    );
+  }, [safetyAssessment]);
+
   // Switch Scale Environment from Top Bar
   const handleSelectScale = (scaleId: ScaleEnvironmentId) => {
     soundEngine.playUiClick(580);
     const recommendedDist = SCALE_ENVIRONMENTS[scaleId].recommendedDistanceMeters;
+    const defaultLocMap: Record<ScaleEnvironmentId, LabLocationId> = {
+      lab_beaker: 'crunchlabs_warehouse',
+      kiddie_pool: 'suburban_backyard',
+      steel_flask: 'science_gymnasium',
+      outdoor_crater: 'desert_proving_ground',
+    };
     setActiveResult(null);
     setConfig((prev) => ({
       ...prev,
       scaleId,
+      locationId: defaultLocMap[scaleId],
       includeOrbeez:
         scaleId === 'steel_flask' || scaleId === 'outdoor_crater' ? true : prev.includeOrbeez,
     }));
@@ -160,6 +197,41 @@ export default function App() {
       ...prev,
       standBackMeters: Math.max(prev.standBackMeters, recommendedDist),
     }));
+
+    // If switching to Giant Volcano or Blast Crater without Goggles/Hazmat, Detective Phat Gus pops up with his Magnifying Glass!
+    if (
+      (scaleId === 'steel_flask' || scaleId === 'outdoor_crater') &&
+      (!safetyGear.goggles || !safetyGear.hazmatSuit)
+    ) {
+      soundEngine.playGusMagnifyingAlert();
+      const scaleName = SCALE_ENVIRONMENTS[scaleId].name;
+      setGusFixAction(() => () => {
+        setSafetyGear((prev) => ({
+          ...prev,
+          goggles: true,
+          gloves: true,
+          hazmatSuit: true,
+          remoteTriggerArmed: true,
+          standBackMeters: Math.max(prev.standBackMeters, recommendedDist),
+        }));
+        setRoberQuote(
+          `Good call! Detective Phat Gus equipped your Goggles, Gloves, Hazmat Suit & Remote Trigger for the ${scaleName}!`
+        );
+      });
+      setGusEvent({
+        id: `gus_scale_${scaleId}_${Date.now()}`,
+        tool: 'magnifying_glass',
+        badgeText: 'PHAT GUS SAFETY INSPECTOR — HOLD UP!',
+        headline: `🔍 "Whoa! No Hazmat Suit at the ${scaleName}?!"`,
+        explanation: `Detective Phat Gus spotted that you moved to the ${
+          SCALE_ENVIRONMENTS[scaleId].vesselCapacityLiters
+        }L ${scaleName} without Splash Goggles or a Thermal Hazmat Suit! If this erupts, you’ll turn into a giant Foam Snowman!`,
+        fixButtonLabel: '🥽 Let Phat Gus Equip My Safety Gear!',
+        ignoreButtonLabel: '🤪 Risk Turning Into a Foam Snowman!',
+        dyeHex: DYE_COLORS[config.dyeColor].hex,
+        showScreenSplatters: false,
+      });
+    }
 
     if (scaleId === 'lab_beaker') {
       setRoberQuote(
@@ -180,16 +252,92 @@ export default function App() {
     }
   };
 
+  // Switch 3D Lab Location / Environment Setting independently!
+  const handleSelectLocation = (locationId: LabLocationId) => {
+    soundEngine.playUiClick(610);
+    setConfig((prev) => ({ ...prev, locationId }));
+    const loc = LAB_LOCATIONS[locationId];
+    setRoberQuote(
+      `Moved the lab to ${loc.name}! Click anywhere on the floor (or press WASD) to walk your Scientist around!`
+    );
+  };
+
+  // Trigger Scientist to physically walk to the 3D Supply Cart or Safety Locker!
+  const handleTriggerScientistFetchStep = (step: IngredientStep) => {
+    soundEngine.playUiClick(630);
+    setFetchErrandTrigger((prev) => ({
+      type: 'ingredient',
+      step,
+      count: prev.count + 1,
+    }));
+    setRoberQuote(
+      `Look at your 3D Scientist go! Walking over to the Supply Cart to grab ${INGREDIENT_META[step].shortLabel} and pour it in!`
+    );
+  };
+
+  const handleTriggerScientistFetchSafety = () => {
+    soundEngine.playUiClick(650);
+    setFetchErrandTrigger((prev) => ({
+      type: 'safety',
+      count: prev.count + 1,
+    }));
+    setRoberQuote(
+      'Your 3D Scientist is walking over to the Safety Locker to strap on Goggles, Gloves, and Hazmat gear!'
+    );
+  };
+
+  const handleUpdateStandBackMeters = useCallback((meters: number, isManualWalk?: boolean) => {
+    setSafetyGear((prev) => {
+      if (prev.standBackMeters === meters) return prev;
+      return { ...prev, standBackMeters: meters };
+    });
+    if (isManualWalk) {
+      const reqDist = SCALE_ENVIRONMENTS[configRef.current.scaleId].recommendedDistanceMeters;
+      if (meters < reqDist) {
+        setRoberQuote(
+          `Your Scientist walked up to ${meters}m from the vessel! That’s inside the ${reqDist}m blast ring—watch out for the Foam Snowman wave!`
+        );
+      }
+    }
+  }, []);
+
   // Update chemical parameters
   const handleUpdateConfig = (partial: Partial<ExperimentConfig>) => {
     soundEngine.playUiClick(540);
     setActiveResult(null);
     setConfig((prev) => {
       const next = { ...prev, ...partial };
-      if (partial.peroxideConcentration === 50) {
-        setRoberQuote(
-          '50% DEVIL’S TOOTHPASTE GRADE! That is 16× stronger than store peroxide—if you only pour a tiny bit of soap (<28 mL/L), it’ll flash straight to >100°C STEAM!'
-        );
+      if (partial.peroxideConcentration && partial.peroxideConcentration >= 35) {
+        if (!safetyGear.goggles || !safetyGear.hazmatSuit) {
+          soundEngine.playGusMagnifyingAlert();
+          setGusFixAction(() => () => {
+            setSafetyGear((g) => ({
+              ...g,
+              goggles: true,
+              gloves: true,
+              hazmatSuit: true,
+              remoteTriggerArmed: true,
+            }));
+            setRoberQuote(
+              `Detective Phat Gus strapped on your Goggles, Gloves & Hazmat Suit for ${partial.peroxideConcentration}% Peroxide!`
+            );
+          });
+          setGusEvent({
+            id: `gus_conc_${partial.peroxideConcentration}_${Date.now()}`,
+            tool: 'magnifying_glass',
+            badgeText: 'PHAT GUS SAFETY VIOLATION SPOTTED!',
+            headline: `🔍 "Hold Your Acorns! ${partial.peroxideConcentration}% Peroxide with Bare Eyes?!"`,
+            explanation: `Phat Gus’s magnifying glass spotted industrial ${partial.peroxideConcentration}% Hydrogen Peroxide (16× stronger than store grade), but your Splash Goggles and Hazmat Suit are UNCHECKED! It boils above 95°C!`,
+            fixButtonLabel: '🦺 Let Phat Gus Equip Full Safety Gear!',
+            ignoreButtonLabel: '🤪 Ignore Gus & Stay Unprotected!',
+            dyeHex: DYE_COLORS[next.dyeColor].hex,
+            showScreenSplatters: false,
+          });
+        } else {
+          setRoberQuote(
+            '50% DEVIL’S TOOTHPASTE GRADE! That is 16× stronger than store peroxide—if you only pour a tiny bit of soap (<28 mL/L), it’ll flash straight to >100°C STEAM!'
+          );
+        }
       }
       return next;
     });
@@ -202,13 +350,13 @@ export default function App() {
       if (key === 'standBackMeters') return prev;
       const nextVal = !prev[key];
       if (key === 'goggles' && nextVal) {
-        setSoapInEyeActive(false);
+        setGusEvent(null);
         setRoberQuote(
           'Splash Goggles ON! Your eyes are now protected from flying dish soap and foam!'
         );
       } else if (key === 'goggles' && !nextVal) {
         setRoberQuote(
-          'Uh oh! You took off your Splash Goggles! Watch out for flying soap bubbles!'
+          'Uh oh! You took off your Splash Goggles! Phat Gus has his mop ready in case soap splats in your eyes!'
         );
       } else if (key === 'gloves' && nextVal) {
         setRoberQuote('Nitrile Gloves ON! No more Smurf-stained fingers!');
@@ -290,6 +438,7 @@ export default function App() {
     const cur = configRef.current;
     const gear = safetyGearRef.current;
     const scale = SCALE_ENVIRONMENTS[cur.scaleId];
+    const dyeHex = DYE_COLORS[cur.dyeColor].hex;
     let logLabel = '';
 
     if (step === 'peroxide') {
@@ -298,9 +447,28 @@ export default function App() {
         cur.peroxideVolumePercent > 100 ? ' [OVERFLOWING RIM!]' : ''
       }`;
       if (cur.peroxideVolumePercent > 100) {
+        soundEngine.playSoapSplatSound();
         setRoberQuote(
-          `WHOA! ${cur.peroxideVolumePercent}% FULL! You poured ${liters} L into a ${scale.vesselCapacityLiters} L container—peroxide is sloshing over the rim!`
+          `OOPS! ${cur.peroxideVolumePercent}% FULL! You poured ${liters} L into a ${scale.vesselCapacityLiters} L container—Janitor Phat Gus brought his mop!`
         );
+        setGusFixAction(() => () => {
+          setConfig((prev) => ({ ...prev, peroxideVolumePercent: 100 }));
+          setSafetyGear((g) => ({ ...g, gloves: true, goggles: true }));
+          setRoberQuote(
+            'Janitor Phat Gus mopped up the overflowing Peroxide back to 100% and put on your Gloves & Goggles!'
+          );
+        });
+        setGusEvent({
+          id: `gus_overflow_${Date.now()}`,
+          tool: 'mop',
+          badgeText: 'JANITOR PHAT GUS — SPILL CLEANUP!',
+          headline: `🧹 "OOPS! You Overfilled the Container to ${cur.peroxideVolumePercent}%!"`,
+          explanation: `Hydrogen Peroxide is sloshing right over the rim onto the lab floor! Want Janitor Phat Gus to mop up the overflow back to 100% and put on your Nitrile Gloves?`,
+          fixButtonLabel: '🧹 Mop Up Overflow to 100% & Put On Gear!',
+          ignoreButtonLabel: '🧽 Leave Floor Puddle As-Is',
+          dyeHex,
+          showScreenSplatters: true,
+        });
       } else {
         setRoberQuote(
           `Measured ${liters} L (${cur.peroxideVolumePercent}% full) of ${cur.peroxideConcentration}% Hydrogen Peroxide into the ${scale.name}!`
@@ -317,11 +485,45 @@ export default function App() {
           : 'SOAP OVERDOSE! (Slime Slug!)';
       logLabel = `Squirted ${cur.soapVolumeMlPerLiter} mL/L Dish Soap (${status})`;
 
-      if (cur.soapVolumeMlPerLiter >= 75) {
+      // Funny Mistake 1: Squirting soap without Splash Goggles -> Janitor Phat Gus Mop Splat!
+      if (!gear.goggles && cur.soapVolumeMlPerLiter >= 40) {
+        soundEngine.playSoapSplatSound();
+        setGusFixAction(() => () => {
+          setSafetyGear((g) => ({ ...g, goggles: true }));
+          setRoberQuote(
+            'Squeaky clean! Janitor Phat Gus mopped the dish soap out of your eyes and strapped on your Splash Goggles!'
+          );
+        });
+        setGusEvent({
+          id: `gus_soap_eye_${Date.now()}`,
+          tool: 'mop',
+          badgeText: 'OOPS! LAB BLOOPER RECORDED IN REPORT!',
+          headline: '🫧👀 "SPLAT! Dish Soap Squirted in Your Eyes!"',
+          explanation: `You squirted ${cur.soapVolumeMlPerLiter} mL/L of Dish Soap with NO Splash Goggles on, and bubbly soap splattered right across your eyeballs! Janitor Phat Gus is here with his sudsy mop!`,
+          fixButtonLabel: '🧹 Mop My Eyes & Put On Splash Goggles!',
+          ignoreButtonLabel: '🧽 Just Mop Screen (Keep Goggles Off)',
+          dyeHex,
+          showScreenSplatters: true,
+        });
+      } else if (cur.soapVolumeMlPerLiter >= 75) {
         soundEngine.playSlimeBurpSound();
-        setRoberQuote(
-          `BWAHAHA! ${cur.soapVolumeMlPerLiter} mL/L OF DISH SOAP?! Science Bob warned us: that much soap will turn the eruption into a heavy, slow-oozing SLIME SLUG!`
-        );
+        setGusFixAction(() => () => {
+          setConfig((prev) => ({ ...prev, soapVolumeMlPerLiter: 44 }));
+          setRoberQuote(
+            'Janitor Phat Gus mopped out the extra soap back to Science Bob’s 44 mL/L Golden Ratio!'
+          );
+        });
+        setGusEvent({
+          id: `gus_slime_${Date.now()}`,
+          tool: 'mop',
+          badgeText: 'PHAT GUS PROPORTION ALERT!',
+          headline: `🧹 "OOPS! ${cur.soapVolumeMlPerLiter} mL/L Is a Giant Soap Overdose!"`,
+          explanation: `Science Bob & Mark Rober discovered that squirting too much Dish Soap weighs down the bubbles into a heavy, slow-oozing SLIME SLUG! Want Gus to mop the excess soap back to 44 mL/L?`,
+          fixButtonLabel: '🧹 Mop Soap Back to 44 mL/L Sweet Spot!',
+          ignoreButtonLabel: '🐌 Keep Soap Overdose (Make Slime Slug!)',
+          dyeHex,
+          showScreenSplatters: false,
+        });
       } else if (cur.soapVolumeMlPerLiter < 28) {
         setRoberQuote(
           `Measured ${cur.soapVolumeMlPerLiter} mL/L Dish Soap! Careful: if you use 50% Peroxide with <28 mL/L soap, it flashes straight to >100°C STEAM!`
@@ -330,15 +532,6 @@ export default function App() {
         setRoberQuote(
           `SWEET SPOT! ${cur.soapVolumeMlPerLiter} mL/L of Dish Soap—right in Science Bob’s Golden Ratio for maximum foam height!`
         );
-      }
-
-      // Funny Mistake: Squirting soap without Splash Goggles -> SPLAT! Soap in Eye!
-      if (!gear.goggles && cur.soapVolumeMlPerLiter >= 40) {
-        soundEngine.playSoapSplatSound();
-        setSoapInEyeReason(
-          `You squirted ${cur.soapVolumeMlPerLiter} mL/L of Dish Soap with NO Splash Goggles on, and soap bubbles splattered right into your eyes!`
-        );
-        setSoapInEyeActive(true);
       }
     } else if (step === 'orbeez') {
       logLabel = `Measured ${(cur.orbeezCount || 2500).toLocaleString()} Orbeez Water Beads`;
@@ -353,9 +546,34 @@ export default function App() {
         beforeSoap ? ' [BEFORE SOAP — MISTAKE!]' : ''
       }`;
       if (beforeSoap) {
-        setRoberQuote(
-          `HOLD EVERYTHING! You poured ${catName} BEFORE Dish Soap! Hit SEND IT to see why all the oxygen boils away without soap!`
-        );
+        soundEngine.playGusMagnifyingAlert();
+        setGusFixAction(() => () => {
+          setConfig((prev) => {
+            const withoutCat: IngredientStep[] = prev.additionOrder.filter((s) => s !== 'catalyst');
+            const withSoap: IngredientStep[] = withoutCat.includes('soap')
+              ? withoutCat
+              : [...withoutCat, 'soap'];
+            return {
+              ...prev,
+              soapVolumeMlPerLiter: Math.max(44, prev.soapVolumeMlPerLiter),
+              additionOrder: [...withSoap, 'catalyst'] as IngredientStep[],
+            };
+          });
+          setRoberQuote(
+            'Detective Phat Gus fixed your Method order: Dish Soap mixed in BEFORE Catalyst!'
+          );
+        });
+        setGusEvent({
+          id: `gus_order_${Date.now()}`,
+          tool: 'magnifying_glass',
+          badgeText: 'DETECTIVE PHAT GUS — RECIPE CLUE!',
+          headline: `🔍 "Wait a Second! Catalyst Added BEFORE Dish Soap!"`,
+          explanation: `Detective Phat Gus’s magnifying glass spotted that you dropped ${catName} into the container BEFORE adding Dish Soap! Without soap micelles waiting in the liquid, 85% of the oxygen gas will boil away as raw fizz!`,
+          fixButtonLabel: '🧪 Let Gus Mix Dish Soap In First!',
+          ignoreButtonLabel: '🤪 Keep Wrong Order & Watch It Boil!',
+          dyeHex,
+          showScreenSplatters: false,
+        });
       } else {
         setRoberQuote(
           `Measured ${cur.catalystRatio}% ${catName} Catalyst! Hit SEND IT to test your mix!`
@@ -422,9 +640,6 @@ export default function App() {
       if (!p.step) return;
       const elapsed = performance.now() - p.startTime;
 
-      // Pour continuously if either:
-      // (a) Held stationary on the bench bottle for > 160ms, OR
-      // (b) Dragged upward into the honest 3D Vessel Target Zone!
       const shouldPourTick = (!p.hasDragged && elapsed >= 160) || (p.hasDragged && p.insideTarget);
       if (shouldPourTick) {
         p.ticksPoured += 1;
@@ -437,10 +652,6 @@ export default function App() {
       const finishedStep = p.step;
       if (!finishedStep) return;
 
-      // Honest Release Rule:
-      // - If the user tapped quickly without dragging away, pour 1 standard scoop and commit.
-      // - If the user dragged into the vessel or held to pour (`ticksPoured > 0`) AND is inside the target on release, commit the phrase!
-      // - If the user dragged OUTSIDE the vessel target (`p.hasDragged && !p.insideTarget`) with 0 ticks poured, cancel honestly!
       if (!p.hasDragged && p.ticksPoured === 0) {
         applyIncrementalPour(finishedStep, true);
         setTimeout(() => commitCompletedPhraseToReport(finishedStep), 20);
@@ -470,10 +681,70 @@ export default function App() {
     };
   }, [activePhraseStep, applyIncrementalPour, commitCompletedPhraseToReport]);
 
-  // Empty Container to 0 L so the child can measure everything from scratch!
+  // Summon Phat Gus On-Demand (Magnifying Glass Safety Inspection or Mop Cleanup!)
+  const handleSummonPhatGusInspector = () => {
+    const dyeHex = DYE_COLORS[config.dyeColor].hex;
+    if (activeResult && activeMishaps.length > 0) {
+      soundEngine.playSoapSplatSound();
+      setGusFixAction(() => () => {
+        handleEquipAllRequiredPpe();
+        handleHoseCleanup();
+      });
+      setGusEvent({
+        id: `gus_manual_mop_${Date.now()}`,
+        tool: 'mop',
+        badgeText: 'JANITOR PHAT GUS — MISHAP CLEANUP!',
+        headline: `🧹 "${activeMishaps[0].title}"`,
+        explanation: `${activeMishaps[0].funnyDescription} Janitor Phat Gus is ready to mop the lab clean and equip your full safety gear!`,
+        fixButtonLabel: '🧹 Mop Up Lab & Equip All Safety Gear!',
+        ignoreButtonLabel: '🧽 Keep Messy Lab As-Is',
+        dyeHex,
+        showScreenSplatters: activeMishaps.some((m) => m.id === 'soap_in_eye'),
+      });
+      return;
+    }
+
+    soundEngine.playGusMagnifyingAlert();
+    if (!safetyAssessment.isCompliant) {
+      setGusFixAction(() => () => {
+        handleEquipAllRequiredPpe();
+      });
+      setGusEvent({
+        id: `gus_manual_inspect_${Date.now()}`,
+        tool: 'magnifying_glass',
+        badgeText: `DETECTIVE PHAT GUS — RISK: ${safetyAssessment.riskLevel}`,
+        headline: `🔍 "I Spotted ${safetyAssessment.missingPrecautions.length} Safety Violation${
+          safetyAssessment.missingPrecautions.length > 1 ? 's' : ''
+        }!"`,
+        explanation: `Missing: ${safetyAssessment.missingPrecautions.join(
+          ' · '
+        )}. Want Phat Gus to check all your safety boxes before you hit SEND IT?`,
+        fixButtonLabel: '🥽 Equip All Safety Gear Now!',
+        ignoreButtonLabel: '🤪 Stay Unprotected (For Science!)',
+        dyeHex,
+        showScreenSplatters: false,
+      });
+    } else {
+      setGusFixAction(() => () => {});
+      setGusEvent({
+        id: `gus_manual_ok_${Date.now()}`,
+        tool: 'magnifying_glass',
+        badgeText: 'DETECTIVE PHAT GUS — 100% COMPLIANT ✓',
+        headline: '🔍 "Squeaky Clean! Your Safety Gear Is 100% Ready!"',
+        explanation: `Goggles, Gloves, and Standoff Distance check out! Predicted height: ${predictedResult.peakHeightMeters}m (${predictedResult.outcomeTitle}). Hit SEND IT whenever you’re ready!`,
+        fixButtonLabel: '👍 Awesome, Thanks Gus!',
+        ignoreButtonLabel: 'Close',
+        dyeHex,
+        showScreenSplatters: false,
+      });
+    }
+  };
+
+  // Empty Container to 0 L
   const handleEmptyContainer = () => {
     soundEngine.playUiClick(420);
     setActiveResult(null);
+    setGusEvent(null);
     setCleanupTriggerCount((c) => c + 1);
     setConfig((prev) => ({
       ...prev,
@@ -486,7 +757,7 @@ export default function App() {
       pouredLog: [],
     }));
     setRoberQuote(
-      'Container emptied to 0 L! Hold or drag any bottle on the bottom bench to measure in a fresh mix (or hit SEND IT on an empty container!).'
+      'Container emptied to 0 L! Hold or drag any bottle on the bottom bench to measure in a fresh mix!'
     );
   };
 
@@ -501,29 +772,9 @@ export default function App() {
     });
     setSafetyGear({ ...found.safetyGear });
     setActiveResult(null);
-    setSoapInEyeActive(false);
+    setGusEvent(null);
     setRoberQuote(
       `Loaded "${found.name}"! Hold or drag bottles to adjust the amounts or uncheck Goggles to see what happens!`
-    );
-  };
-
-  const handleEquipAllRequiredPpe = () => {
-    soundEngine.playUiClick(720);
-    setSoapInEyeActive(false);
-    setSafetyGear({
-      goggles: true,
-      gloves: true,
-      hazmatSuit:
-        safetyAssessment.requiresHazmat || config.peroxideConcentration >= 25,
-      remoteTriggerArmed:
-        safetyAssessment.requiresRemoteTrigger || config.peroxideConcentration >= 25,
-      standBackMeters: Math.max(
-        safetyGear.standBackMeters,
-        safetyAssessment.minSafeDistanceMeters
-      ),
-    });
-    setRoberQuote(
-      'All Safety Equipment checked! Goggles, Gloves, and Hazmat Suit are equipped on your 3D Scientist!'
     );
   };
 
@@ -578,13 +829,53 @@ export default function App() {
     setEruptionTriggerCount((c) => c + 1);
 
     const mishaps = evaluateExperimentMishaps(activeConfig, safetyGear, result);
+    const dyeHex = DYE_COLORS[activeConfig.dyeColor].hex;
 
+    // Trigger Janitor Phat Gus Mop Overlay if a funny safety/foam mishap happened!
     if (mishaps.some((m) => m.id === 'soap_in_eye')) {
       soundEngine.playSoapSplatSound();
-      setSoapInEyeReason(
-        `You launched ${result.outcomeTitle} WITHOUT Splash Goggles! Warm soapy foam splattered right into your eyes!`
-      );
-      setSoapInEyeActive(true);
+      setGusFixAction(() => () => {
+        setSafetyGear((g) => ({ ...g, goggles: true, gloves: true }));
+        setRoberQuote(
+          'Janitor Phat Gus mopped the foam off your face and strapped on your Splash Goggles & Gloves!'
+        );
+      });
+      setGusEvent({
+        id: `gus_erupt_soap_eye_${Date.now()}`,
+        tool: 'mop',
+        badgeText: 'JANITOR PHAT GUS — FOAM SPLAT CLEANUP!',
+        headline: '🫧👀 "OOPS! You Launched Without Splash Goggles!"',
+        explanation: `You launched "${result.outcomeTitle}" without Splash Goggles, and warm soapy foam splattered right across your eyes! Let Janitor Phat Gus mop your screen clean!`,
+        fixButtonLabel: '🧹 Mop My Eyes & Put On Splash Goggles!',
+        ignoreButtonLabel: '🧽 Just Mop Screen (Keep Goggles Off)',
+        dyeHex,
+        showScreenSplatters: true,
+      });
+    } else if (mishaps.some((m) => m.id === 'foam_snowman_buried')) {
+      soundEngine.playSoapSplatSound();
+      setGusFixAction(() => () => {
+        setSafetyGear((g) => ({
+          ...g,
+          goggles: true,
+          gloves: true,
+          hazmatSuit: true,
+          remoteTriggerArmed: true,
+        }));
+        setRoberQuote(
+          'Janitor Phat Gus mopped the Foam Snowman off your 3D Scientist and zipped up your Thermal Hazmat Suit!'
+        );
+      });
+      setGusEvent({
+        id: `gus_snowman_${Date.now()}`,
+        tool: 'mop',
+        badgeText: 'JANITOR PHAT GUS — SNOWMAN RESCUE!',
+        headline: '⛄🧹 "OOPS! Your Scientist Turned Into a Foam Snowman!"',
+        explanation: `A ${result.peakHeightMeters}m wave of hot Elephant’s Toothpaste buried your 3D Scientist because your Hazmat Suit was unchecked! Janitor Phat Gus brought his giant mop!`,
+        fixButtonLabel: '🧹 Mop Off Scientist & Equip Hazmat Suit!',
+        ignoreButtonLabel: '⛄ Stay a Foam Snowman!',
+        dyeHex,
+        showScreenSplatters: true,
+      });
     }
 
     if (
@@ -687,7 +978,7 @@ export default function App() {
     soundEngine.playHoseCleanup();
     setCleanupTriggerCount((c) => c + 1);
     setActiveResult(null);
-    setSoapInEyeActive(false);
+    setGusEvent(null);
     setRoberQuote(
       'Hosing down the foam and washing off your 3D Scientist! Ready to measure a new experiment!'
     );
@@ -779,16 +1070,22 @@ export default function App() {
         eruptionTriggerCount={eruptionTriggerCount}
         cleanupTriggerCount={cleanupTriggerCount}
         pourStepTrigger={pourStepTrigger}
+        fetchErrandTrigger={fetchErrandTrigger}
         cameraPreset={cameraPreset}
         showArMeasures={showArMeasures}
         onRegisterSnapshotFn={handleRegisterSnapshotFn}
         onAutoPhotoCaptured={handleAutoPhotoCaptured}
+        onUpdateStandBackMeters={handleUpdateStandBackMeters}
+        onScientistFetchedIngredient={(step) => {
+          applyIncrementalPour(step, true);
+          setTimeout(() => commitCompletedPhraseToReport(step), 30);
+        }}
+        onScientistFetchedSafety={handleEquipAllRequiredPpe}
       />
 
       {/* State 2 Honest Spatial Vessel Target & Live Graduated Pouring Gauge (Staged ONLY during active Pour Phrase!) */}
       {activePhraseStep && (
         <>
-          {/* Honest Spatial Boundary over the 3D Container */}
           <div
             className={`pointer-events-none fixed left-[18vw] right-[24vw] top-16 bottom-24 z-30 rounded-3xl border-2 border-dashed transition-colors flex flex-col items-center justify-between p-4 ${
               isPouringActiveNow
@@ -832,7 +1129,6 @@ export default function App() {
                   })`}
               </div>
 
-              {/* Graduated Cylinder Bar with Sweet Spot & Overdose Zones */}
               <div className="w-64 h-3 bg-slate-900 rounded-full overflow-hidden border border-slate-700 mt-1.5 relative">
                 {activePhraseStep === 'soap' && (
                   <div
@@ -863,7 +1159,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Tilted Pouring Bottle Follower attached to Pointer */}
           <div
             className="pointer-events-none fixed z-50 -translate-x-1/2 -translate-y-1/2 px-3 py-1.5 rounded-xl border-2 shadow-2xl font-bold text-xs whitespace-nowrap transition-transform"
             style={{
@@ -881,81 +1176,20 @@ export default function App() {
         </>
       )}
 
-      {/* Hilarious "SPLAT! SOAP & FOAM IN YOUR EYES!" Overlay when Splash Goggles are forgotten! */}
-      {soapInEyeActive && (
-        <div className="fixed inset-0 z-40 pointer-events-auto flex flex-col items-center justify-center p-4">
-          <div
-            className="pointer-events-none absolute -top-12 -left-12 w-72 h-72 rounded-full opacity-85"
-            style={{
-              backgroundColor: DYE_COLORS[config.dyeColor].hex,
-              border: '8px solid rgba(255,255,255,0.8)',
-            }}
-          />
-          <div
-            className="pointer-events-none absolute top-8 right-6 w-64 h-64 rounded-full opacity-85"
-            style={{
-              backgroundColor: '#34d399',
-              border: '8px solid rgba(255,255,255,0.85)',
-            }}
-          />
-          <div
-            className="pointer-events-none absolute bottom-24 left-12 w-80 h-60 rounded-full opacity-85"
-            style={{
-              backgroundColor: '#f8fafc',
-              border: '6px solid #38bdf8',
-            }}
-          />
-          <div
-            className="pointer-events-none absolute bottom-16 right-12 w-72 h-72 rounded-full opacity-85"
-            style={{
-              backgroundColor: DYE_COLORS[config.dyeColor].hex,
-              border: '8px solid rgba(255,255,255,0.85)',
-            }}
-          />
-
-          <div
-            className="relative z-10 max-w-md w-full rounded-2xl border-2 border-amber-400 p-5 text-center shadow-2xl space-y-3"
-            style={{ backgroundColor: 'rgba(9, 13, 22, 0.96)' }}
-          >
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-rose-500/20 border border-rose-400/60 text-rose-300 text-xs font-bold font-mono-tabular">
-              <Sparkles className="w-3.5 h-3.5" />
-              LAB BLOOPER ADDED TO YOUR SCIENCE REPORT!
-            </div>
-            <h2 className="text-2xl font-extrabold font-display text-white">
-              🫧👀 SPLAT! SOAP IN YOUR EYES!
-            </h2>
-            <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">
-              {soapInEyeReason} Everything looks blurry and squeaky!
-            </p>
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  soundEngine.playUiClick(740);
-                  setSoapInEyeActive(false);
-                  setSafetyGear((prev) => ({ ...prev, goggles: true }));
-                  setRoberQuote(
-                    'Phew! Eyes wiped clean and Splash Goggles strapped on! That blooper was recorded in your Science Report!'
-                  );
-                }}
-                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs sm:text-sm shadow-lg transition-transform active:scale-95"
-              >
-                🧻 Wipe Eyes & Put On Splash Goggles!
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  soundEngine.playUiClick(520);
-                  setSoapInEyeActive(false);
-                }}
-                className="w-full sm:w-auto px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs"
-              >
-                Just Wipe Eyes (Keep Goggles Off)
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Cartoon "Phat Gus" Squirrel Oops Overlay (Magnifying Glass Safety Inspector OR Sudsy Mop Cleanup!) */}
+      <PhatGusOopsOverlay
+        event={gusEvent}
+        onFixAndClean={() => {
+          soundEngine.playUiClick(740);
+          if (gusFixAction) gusFixAction();
+          setGusEvent(null);
+        }}
+        onIgnoreOrKeepAsIs={() => {
+          soundEngine.playUiClick(520);
+          setGusEvent(null);
+        }}
+        onTriggerMopSound={() => soundEngine.playGusMopSweepSound()}
+      />
 
       {/* Big 3-2-1 Countdown Overlay in Center of Screen */}
       {countdownNumber !== null && (
@@ -1038,18 +1272,29 @@ export default function App() {
         </div>
       </header>
 
-      {/* Mark Rober's Compact Commentary Bubble (Top-Left) */}
+      {/* Mark Rober's Compact Commentary Bubble + 1-Click "Phat Gus Inspector / Mop" Trigger (Top-Left) */}
       <div
-        className="fixed top-14 left-3 z-10 max-w-[260px] sm:max-w-[300px] rounded-xl border border-slate-700/90 px-2.5 py-2 pointer-events-auto shadow-lg"
+        className="fixed top-14 left-3 z-10 max-w-[270px] sm:max-w-[315px] rounded-xl border border-slate-700/90 px-2.5 py-2 pointer-events-auto shadow-lg"
         style={{ backgroundColor: 'rgba(9, 13, 22, 0.88)' }}
       >
-        <div className="flex items-start gap-2.5">
+        <div className="flex items-start gap-2">
           <div className="w-7 h-7 rounded-lg bg-amber-500 text-slate-950 font-extrabold font-display flex items-center justify-center text-xs shrink-0 mt-0.5">
             MR
           </div>
           <div className="min-w-0 flex-1">
-            <div className="text-[10px] font-bold font-mono-tabular text-amber-400">
-              MARK ROBER’S LAB BUDDY
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-[10px] font-bold font-mono-tabular text-amber-400">
+                MARK ROBER & PHAT GUS
+              </span>
+              <button
+                type="button"
+                onClick={handleSummonPhatGusInspector}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/60 text-[10px] font-bold text-amber-300 whitespace-nowrap shrink-0"
+                title="Summon Phat Gus the Squirrel with his Magnifying Glass or Mop!"
+              >
+                <Search className="w-2.5 h-2.5" />
+                <span>Ask Phat Gus!</span>
+              </button>
             </div>
             <p className="text-xs text-slate-100 leading-snug mt-0.5">{roberQuote}</p>
             {photoFlashToast && (
@@ -1091,11 +1336,14 @@ export default function App() {
           soundEngine.setMuted(next);
         }}
         onSelectScale={handleSelectScale}
+        onSelectLocation={handleSelectLocation}
         onUpdateConfig={handleUpdateConfig}
         onToggleSafetyGear={handleToggleSafetyGear}
         onEquipAllSafety={handleEquipAllRequiredPpe}
         activePhraseStep={activePhraseStep}
         onBeginPourPhrase={handleBeginPourPhrase}
+        onTriggerScientistFetchStep={handleTriggerScientistFetchStep}
+        onTriggerScientistFetchSafety={handleTriggerScientistFetchSafety}
         onEmptyContainer={handleEmptyContainer}
         onApplyPreset={handleApplyPreset}
         onTriggerEruption={handleTriggerEruption}

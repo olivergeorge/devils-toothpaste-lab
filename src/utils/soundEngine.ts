@@ -329,8 +329,68 @@ class LabSoundEngine {
     osc.start(now);
     osc.stop(now + 0.4);
   }
+
+  // Cute squirrel chitter + detective magnifying-glass "ding!" when Phat Gus spots a safety hazard
+  public playGusMagnifyingAlert() {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+
+    const now = ctx.currentTime;
+    // Quick squirrel chitters
+    [0, 0.065, 0.13].forEach((offset, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      const base = 920 + idx * 140;
+      osc.frequency.setValueAtTime(base, now + offset);
+      osc.frequency.exponentialRampToValueAtTime(base * 1.35, now + offset + 0.05);
+      gain.gain.setValueAtTime(0.07, now + offset);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.055);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + 0.06);
+    });
+
+    // Detective glass "ding"
+    const ding = ctx.createOscillator();
+    const dingGain = ctx.createGain();
+    ding.type = 'sine';
+    ding.frequency.setValueAtTime(1567.98, now + 0.2); // G6
+    dingGain.gain.setValueAtTime(0.09, now + 0.2);
+    dingGain.gain.exponentialRampToValueAtTime(0.001, now + 0.55);
+    ding.connect(dingGain);
+    dingGain.connect(ctx.destination);
+    ding.start(now + 0.2);
+    ding.stop(now + 0.56);
+  }
+
+  // Squeaky-clean mop sweep sound when Phat Gus mops up foam/soap mishaps!
+  public playGusMopSweepSound() {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+
+    const now = ctx.currentTime;
+    // 3 squeaky rubber/mop wipes
+    [0, 0.22, 0.44].forEach((offset, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      const startFreq = idx % 2 === 0 ? 580 : 980;
+      const endFreq = idx % 2 === 0 ? 1120 : 620;
+      osc.frequency.setValueAtTime(startFreq, now + offset);
+      osc.frequency.exponentialRampToValueAtTime(endFreq, now + offset + 0.16);
+      gain.gain.setValueAtTime(0.09, now + offset);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + offset + 0.18);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + 0.19);
+    });
+  }
 }
 
 export const soundEngine = new LabSoundEngine();
+
 
 

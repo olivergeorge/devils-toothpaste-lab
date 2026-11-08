@@ -2,6 +2,8 @@ import {
   DyeColorId,
   ExperimentConfig,
   IngredientStep,
+  LabLocationId,
+  LabLocationSpec,
   LabMishap,
   PresetExperiment,
   ReactionSimulationResult,
@@ -10,6 +12,49 @@ import {
   ScaleEnvironmentId,
   ScaleEnvironmentSpec,
 } from '../types/chemistry';
+
+export const LAB_LOCATIONS: Record<LabLocationId, LabLocationSpec> = {
+  crunchlabs_warehouse: {
+    id: 'crunchlabs_warehouse',
+    name: 'CrunchLabs Engineering Warehouse',
+    shortName: 'CrunchLabs Studio',
+    subtitle: 'Mark Rober’s Indoor Prototype Bay · Blueprints & Tool Chests',
+    skyHex: 0x0f172a,
+    fogHex: 0x0f172a,
+    fogDensity: 0.007,
+    groundColorHex: 0x1e293b,
+  },
+  suburban_backyard: {
+    id: 'suburban_backyard',
+    name: 'Sunny Backyard Lawn & Patio',
+    shortName: 'Backyard Lawn',
+    subtitle: 'Suburban Grass Yard · Wood Fence & Phat Gus’s Tree Stump',
+    skyHex: 0x0284c7,
+    fogHex: 0x38bdf8,
+    fogDensity: 0.0055,
+    groundColorHex: 0x14532d,
+  },
+  science_gymnasium: {
+    id: 'science_gymnasium',
+    name: 'School Science Fair Gymnasium',
+    shortName: 'Science Fair Gym',
+    subtitle: 'Hardwood Basketball Court · 3.0m Hoop & Bleachers',
+    skyHex: 0x1e1b4b,
+    fogHex: 0x1e1b4b,
+    fogDensity: 0.0065,
+    groundColorHex: 0x78350f,
+  },
+  desert_proving_ground: {
+    id: 'desert_proving_ground',
+    name: 'Mojave Desert Blast Canyon',
+    shortName: 'Desert Canyon',
+    subtitle: 'Red-Rock Quarry Proving Ground · Golden Hour Canyon',
+    skyHex: 0x7c2d12,
+    fogHex: 0x9a3412,
+    fogDensity: 0.006,
+    groundColorHex: 0x7c2d12,
+  },
+};
 
 export const SCALE_ENVIRONMENTS: Record<ScaleEnvironmentId, ScaleEnvironmentSpec> = {
   lab_beaker: {
