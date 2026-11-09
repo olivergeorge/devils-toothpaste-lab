@@ -32,6 +32,28 @@ import { ThreeViewport } from './components/ThreeViewport';
 import { ScienceReportModal } from './components/ScienceReportModal';
 import { LiveScienceReportDock } from './components/LiveScienceReportDock';
 import { PhatGusOopsEvent, PhatGusOopsOverlay } from './components/PhatGusOopsOverlay';
+import { BetPhase, ReactionModelPanel } from './components/ReactionModelPanel';
+import { Bet, Stars, defaultBet, explainBiggestCause, scoreBet } from './utils/betScoring';
+
+const STORAGE_KEY_DISCOVERIES = 'elephants_toothpaste_discoveries_v1';
+
+function loadDiscoveries(): string[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_DISCOVERIES);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDiscoveries(list: string[]) {
+  try {
+    localStorage.setItem(STORAGE_KEY_DISCOVERIES, JSON.stringify(list));
+  } catch {
+    /* private mode: discoveries just won't persist */
+  }
+}
 
 const STORAGE_KEY_REPORTS = 'elephants_toothpaste_saved_reports_v1';
 
@@ -112,6 +134,23 @@ export default function App() {
   const [photoFlashToast, setPhotoFlashToast] = useState<string | null>(null);
 
   const [photos, setPhotos] = useState<CapturedPhoto[]>([]);
+  // "Call your shot": bet → running → review
+  const [betPhase, setBetPhase] = useState<BetPhase>('bet');
+  const [bet, setBet] = useState<Bet>(() => defaultBet(PRESET_EXPERIMENTS[0].config.scaleId));
+  const [betTouched, setBetTouched] = useState(false);
+  const [elapsedModelS, setElapsedModelS] = useState(0);
+  const [cursorS, setCursorS] = useState(0);
+  const [betOutcome, setBetOutcome] = useState<{
+    stars: Stars;
+    sentence: string;
+    newDiscovery: boolean;
+  } | null>(null);
+  // Phones start with the panel folded into its header so it doesn't cover the scene.
+  const [isBetPanelCollapsed, setIsBetPanelCollapsed] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 640
+  );
+  const discoveriesRef = useRef<string[]>(loadDiscoveries());
+
   const [savedReports, setSavedReports] = useState<ScienceReport[]>(() => {
     try {
       const raw = localStorage.getItem(STORAGE_KEY_REPORTS);
@@ -145,6 +184,23 @@ export default function App() {
   }, [isReportModalOpen]);
 
   const predictedResult = useMemo(() => simulateReactionPhysics(config), [config]);
+
+  // Changing the recipe after a run starts a new round: clear the curves, keep the rocket where it was.
+  const betPhaseRef = useRef(betPhase);
+  betPhaseRef.current = betPhase;
+  useEffect(() => {
+    if (betPhaseRef.current === 'review') {
+      setBetPhase('bet');
+      setBetTouched(false);
+      setBetOutcome(null);
+    }
+  }, [config]);
+
+  // A new rig has a different height scale, so re-centre the rocket.
+  useEffect(() => {
+    setBet(defaultBet(config.scaleId));
+    setBetTouched(false);
+  }, [config.scaleId]);
   const safetyAssessment = useMemo(
     () => evaluateSafetyHazards(config, safetyGear),
     [config, safetyGear]
@@ -828,6 +884,23 @@ export default function App() {
     setActiveResult(result);
     setEruptionTriggerCount((c) => c + 1);
 
+    // Score the bet now; the panel reveals it once the curve has finished drawing.
+    const series = result.timeSeries;
+    const { stars } = scoreBet(
+      bet,
+      { tPeakS: series?.timeToPeakS ?? 0, heightM: result.peakHeightMeters },
+      activeConfig.scaleId
+    );
+    const newDiscovery = !discoveriesRef.current.includes(result.outcomeMode);
+    if (newDiscovery) {
+      discoveriesRef.current = [...discoveriesRef.current, result.outcomeMode];
+      saveDiscoveries(discoveriesRef.current);
+    }
+    setBetOutcome({ stars, sentence: explainBiggestCause(activeConfig, result), newDiscovery });
+    setElapsedModelS(0);
+    setCursorS(series?.timeToPeakS ?? 0);
+    setBetPhase('running');
+
     const mishaps = evaluateExperimentMishaps(activeConfig, safetyGear, result);
     const dyeHex = DYE_COLORS[activeConfig.dyeColor].hex;
 
@@ -944,6 +1017,11 @@ export default function App() {
     }
   };
 
+  const handlePlaybackTick = useCallback((modelT: number, done: boolean) => {
+    setElapsedModelS(modelT);
+    if (done) setBetPhase((p) => (p === 'running' ? 'review' : p));
+  }, []);
+
   const handleTriggerEruption = () => {
     if (countdownNumber !== null) return;
 
@@ -979,6 +1057,9 @@ export default function App() {
     setCleanupTriggerCount((c) => c + 1);
     setActiveResult(null);
     setGusEvent(null);
+    setBetPhase('bet');
+    setBetTouched(false);
+    setBetOutcome(null);
     setRoberQuote(
       'Hosing down the foam and washing off your 3D Scientist! Ready to measure a new experiment!'
     );
@@ -1081,6 +1162,29 @@ export default function App() {
           setTimeout(() => commitCompletedPhraseToReport(step), 30);
         }}
         onScientistFetchedSafety={handleEquipAllRequiredPpe}
+        onPlaybackTick={handlePlaybackTick}
+        scrubModelS={betPhase === 'review' ? cursorS : null}
+      />
+
+      {/* Call Your Shot: bet on the foam, watch the real curve race it, replay what happened inside */}
+      <ReactionModelPanel
+        scaleId={config.scaleId}
+        phase={betPhase}
+        bet={bet}
+        betTouched={betTouched}
+        onBetChange={(b) => {
+          setBet(b);
+          setBetTouched(true);
+        }}
+        series={betPhase === 'bet' ? null : activeResult?.timeSeries ?? null}
+        elapsedModelS={elapsedModelS}
+        cursorS={cursorS}
+        onCursorChange={setCursorS}
+        stars={betOutcome?.stars ?? null}
+        sentence={betOutcome?.sentence ?? null}
+        newDiscovery={betOutcome?.newDiscovery ?? false}
+        collapsed={isBetPanelCollapsed}
+        onToggleCollapsed={() => setIsBetPanelCollapsed((v) => !v)}
       />
 
       {/* State 2 Honest Spatial Vessel Target & Live Graduated Pouring Gauge (Staged ONLY during active Pour Phrase!) */}
@@ -1315,6 +1419,7 @@ export default function App() {
         safetyAssessment={safetyAssessment}
         activeResult={activeResult}
         predictedResult={predictedResult}
+        yourGuessM={betTouched ? bet.heightM : null}
         activeMishaps={activeMishaps}
         photos={photos}
         isCollapsed={isDockCollapsed}
