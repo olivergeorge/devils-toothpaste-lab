@@ -60,7 +60,7 @@ in real seconds. Plain functions, no React.
 - Decomposition `r = k(T) · c_cat · P / V`, with Arrhenius `k(T) = k₂₀ · exp(Eₐ/R · (1/293 − 1/(T+273)))`.
   Eₐ per catalyst from published values (about 56 kJ/mol for iodide, about 20 kJ/mol for catalase in yeast);
   `k₂₀` tuned per catalyst so presets keep their current feel.
-- **Yeast denatures**: catalase activity falls off sharply above ~45–55 °C. This is the best
+- **Yeast denatures**: catalase activity falls off sharply around 58 °C (logistic). This is the best
   kid-level surprise in the model and it is true.
 - `dP/dt = −r`, `dO/dt = r/2`.
 - Foam in = O₂ gas volume (ideal gas at T) × trap efficiency (soap amount, catalyst-before-soap

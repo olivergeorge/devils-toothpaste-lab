@@ -31,7 +31,7 @@
 - `types/chemistry.ts`: `ReactionSample { t; peroxideFraction; oxygenLiters; foamLiters; tempC; heightM }`, `ReactionTimeSeries { samples; timeToPeakS; peakHeightM; peakTempC; totalOxygenLiters; settleS; steamIntensity; boiled }`, optional `ReactionSimulationResult.timeSeries`.
 - `reactionModel.ts`: `soapQualityFactor(mlPerLiter): number`, `runReactionModel(config: ExperimentConfig): ReactionTimeSeries`.
 
-Model (per spec): first-order decomposition `dP/dt = −k(T)·a·P`, Arrhenius (Eₐ 56 kJ/mol KI, 20 kJ/mol yeast), yeast denature logistic around 50 °C, heat balance with ΔH 98.2 kJ/mol, boiling cap at 100 °C with excess heat to steam, foam stock fed by trapped gas and drained by `F/τ`, spray stock fed by untrapped gas and steam, height ∝ geometry × ((F+S)/V)^α with α and C fitted to the baselines.
+Model (per spec): first-order decomposition `dP/dt = −k(T)·a·P`, Arrhenius (Eₐ 56 kJ/mol KI, 20 kJ/mol yeast), yeast denature logistic around 58 °C, heat balance with ΔH 98.2 kJ/mol, boiling cap at 100 °C with excess heat to steam, foam stock fed by trapped gas and drained by `F/τ`, spray stock fed by untrapped gas and steam, height ∝ geometry × ((F+S)/V)^α with α and C fitted to the baselines.
 
 Tests: P never negative; O₂ conserved; hotter start → earlier peak (KI); yeast at 60 °C slower than at 40 °C; no catalyst → flat; heat runaway reaches 100 °C at 50 %.
 

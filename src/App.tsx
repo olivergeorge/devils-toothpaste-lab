@@ -185,11 +185,12 @@ export default function App() {
 
   const predictedResult = useMemo(() => simulateReactionPhysics(config), [config]);
 
-  // Changing the recipe after a run starts a new round: clear the curves, keep the rocket where it was.
+  // Changing the recipe during or after a run starts a new round: clear the curves, keep the
+  // rocket where it was. (Mid-run changes also clear the result, so waiting would hang 'running'.)
   const betPhaseRef = useRef(betPhase);
   betPhaseRef.current = betPhase;
   useEffect(() => {
-    if (betPhaseRef.current === 'review') {
+    if (betPhaseRef.current !== 'bet') {
       setBetPhase('bet');
       setBetTouched(false);
       setBetOutcome(null);
